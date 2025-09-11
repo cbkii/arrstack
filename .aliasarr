@@ -1,0 +1,235 @@
+# ~/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
+# Source from your shell:  [ -f "$HOME/srv/.aliasarr" ] && source "$HOME/srv/.aliasarr"
+# Assumes the merged installer’s defaults; override via env before sourcing:
+#   export ARR_BASE="$HOME/srv"
+#   export ARR_STACK_DIR="$ARR_BASE/arr-stack"
+#   export ARR_DOCKER_DIR="$ARR_BASE/docker"
+
+# ----------------[ Core paths ]----------------
+ARR_BASE="${ARR_BASE:-$HOME/srv}"
+ARR_STACK_DIR="${ARR_STACK_DIR:-$ARR_BASE/arr-stack}"
+ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-$ARR_BASE/docker}"
+ARR_ENV_FILE="${ARR_ENV_FILE:-$ARR_STACK_DIR/.env}"
+ARR_DC="docker compose --env-file \"$ARR_ENV_FILE\" -f \"$ARR_STACK_DIR/docker-compose.yml\""
+
+# ----------------[ Utilities ]-----------------
+_arr_exists() { docker ps -a --format '{{.Names}}' | grep -qx "$1"; }
+_arr_dc()     { ( cd "$ARR_STACK_DIR" && eval "$ARR_DC $*" ); }
+_arr_get()    { grep -E "^$1=" "$ARR_ENV_FILE" 2>/dev/null | sed 's/^[^=]*=//' | tr -d '"' ; }
+_arr_url()    { printf "http://%s:%s" "${1:-127.0.0.1}" "${2:?port}"; }
+_arr_now()    { date +%Y%m%d-%H%M%S; }
+_arr_info()   { printf "[arr] %s\n" "$*"; }
+_arr_warn()   { printf "[arr:warn] %s\n" "$*" >&2; }
+
+# Known services in this project (compose names)
+ARR_SERVICES=(gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr)
+
+# ----------------[ Project-level controls ]----------------
+arr.up()       { _arr_dc up -d; }
+arr.down()     { _arr_dc down; }
+arr.restart()  { _arr_dc restart "$@"; }
+arr.pull()     { _arr_dc pull "$@"; }
+arr.ps()       { _arr_dc ps; }
+arr.logs()     { local s="${1:-}"; shift || true; [[ -n "$s" ]] && _arr_dc logs -f --tail=200 "$s" "$@" || _arr_dc logs -f --tail=100; }
+arr.tail()     { arr.logs "$@"; }
+arr.stats()    { docker stats --no-stream $(printf "%s " "${ARR_SERVICES[@]}") 2>/dev/null || true; }
+arr.shell()    { local s="${1:?service}"; docker exec -it "$s" /bin/bash 2>/dev/null || docker exec -it "$s" /bin/sh; }
+arr.health()   { for s in "${ARR_SERVICES[@]}"; do printf "%-14s : %s\n" "$s" "$(docker inspect --format '{{.State.Health.Status}}' "$s" 2>/dev/null || echo n/a)"; done; }
+arr.backup()   {
+  local ts dir out base="$ARR_DOCKER_DIR" dst="$ARR_BASE/backups/cli-$(_arr_now)";
+  mkdir -p "$dst"
+  for s in "${ARR_SERVICES[@]}"; do
+    dir="$base/$s"; out="$dst/${s}-config.tgz"
+    [[ -d "$dir" ]] && tar -C "$base" -czf "$out" "$s" && echo "saved -> $out"
+  done
+  echo "Backups in $dst"
+}
+arr.open()     {
+  # Best-effort open in default browser (Linux desktop); otherwise just echo URLs
+  local open_cmd
+  if command -v xdg-open >/dev/null; then open_cmd="xdg-open"; else open_cmd=""; fi
+  local host="127.0.0.1"
+  local qport="$(_arr_get QBT_HTTP_PORT_HOST)"; [[ -z "$qport" ]] && qport=8080
+  local urls=(
+    "qBittorrent=$(_arr_url $host $qport)"
+    "Sonarr=$(_arr_url $host 8989)"
+    "Radarr=$(_arr_url $host 7878)"
+    "Prowlarr=$(_arr_url $host 9696)"
+    "Bazarr=$(_arr_url $host 6767)"
+    "FlareSolverr=$(_arr_url $host 8191)"
+  )
+  for u in "${urls[@]}"; do
+    local name="${u%%=*}" url="${u#*=}"
+    echo "• $name -> $url"
+    [[ -n "$open_cmd" ]] && "$open_cmd" "$url" >/dev/null 2>&1 || true
+  done
+}
+
+# ----------------[ Gluetun / ProtonVPN helpers ]----------------
+# (This folds in the previous `pvpn` helper.)
+pvpn() {
+  local cmd="${1:-}"; shift || true
+  local BASE="$ARR_BASE"; local STACK_DIR="$ARR_STACK_DIR"; local ENV_FILE="$ARR_ENV_FILE"
+  local CREDS_FILE="$ARR_DOCKER_DIR/gluetun/proton-credentials.conf"
+  _get(){ _arr_get "$1"; }
+  _set(){ local k="$1" v="$2"; sed -i "/^${k}=/d" "$ENV_FILE" 2>/dev/null; [[ -n "$v" ]] && echo "${k}=${v}" >>"$ENV_FILE"; }
+  _restart(){ ( cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" restart gluetun ); }
+
+  case "$cmd" in
+    c|connect)   ( cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" up -d gluetun qbittorrent );;
+    r|reconnect) _restart;;
+    mode)
+      case "${1:-}" in
+        openvpn|ovpn) _set VPN_MODE openvpn; _restart;;
+        wireguard|wg) _arr_warn "PF is less reliable on WG with Proton"; _set VPN_MODE wireguard; _restart;;
+        *) echo "Usage: pvpn mode [openvpn|wireguard]"; return 1;;
+      esac;;
+    creds)
+      local user pass
+      read -rp "Proton username (without +pmp): " user
+      read -rsp "Password: " pass; echo
+      sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "$CREDS_FILE" 2>/dev/null || true
+      echo "PROTON_USER=${user}" >>"$CREDS_FILE"
+      echo "PROTON_PASS=${pass}" >>"$CREDS_FILE"
+      sed -i '/^OPENVPN_USER=/d' "$ENV_FILE" 2>/dev/null || true
+      echo "OPENVPN_USER=${user}+pmp" >>"$ENV_FILE"
+      echo "PROTON_PASS=${pass}" >>"$ENV_FILE"
+      echo "Updated creds. Restarting gluetun…"
+      _restart;;
+    s|status)
+      echo "-- Gluetun --"
+      docker ps --filter name=gluetun --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | tail -n +2
+      echo "-- Public IP --";  curl -fsS http://127.0.0.1:8000/v1/publicip/ip || echo N/A
+      if [ "$(_get VPN_MODE)" = "openvpn" ]; then
+        echo "-- Forwarded port (OVPN) --"; curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || echo N/A
+      else
+        echo "-- Forwarded port (WG) --";   curl -fsS http://127.0.0.1:8000/v1/wireguard/portforwarded || echo N/A
+      fi;;
+    port)
+      if [ "$(_get VPN_MODE)" = "openvpn" ]; then
+        curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded
+      else
+        curl -fsS http://127.0.0.1:8000/v1/wireguard/portforwarded
+      fi;;
+    *) cat <<USAGE
+pvpn commands:
+  connect|c        Start gluetun + qbittorrent
+  reconnect|r      Restart gluetun
+  mode <ovpn|wg>   Switch VPN mode (ovpn recommended for PF)
+  creds            Update Proton username/password (adds +pmp)
+  status|s         Show container, public IP, forwarded port
+  port             Print forwarded port only
+USAGE
+      ;;
+  esac
+}
+
+glue.logs()   { arr.logs gluetun; }
+glue.restart(){ docker restart gluetun; }
+glue.ip()     { curl -fsS http://127.0.0.1:8000/v1/publicip/ip; echo; }
+glue.pf()     { pvpn port; echo; }
+glue.health() { docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo n/a; }
+
+# ----------------[ qBittorrent helpers ]----------------
+_qbt_host()   { printf "%s" "${QBT_HOST:-127.0.0.1}"; }
+_qbt_port()   { local p="$(_arr_get QBT_HTTP_PORT_HOST)"; [[ -n "$p" ]] && printf "%s" "$p" || printf "%s" "8080"; }
+_qbt_user()   { local u="$(_arr_get QBT_USER)"; [[ -n "$u" ]] && printf "%s" "$u" || printf "%s" "admin"; }
+_qbt_pass()   { local p="$(_arr_get QBT_PASS)"; [[ -n "$p" ]] && printf "%s" "$p" || printf "%s" "adminadmin"; }
+_qbt_base()   { printf "http://%s:%s" "$(_qbt_host)" "$(_qbt_port)"; }
+_qbt_cookie() { printf "/tmp/qbt-%s.cookie" "$USER"; }
+
+_qbt_login() {
+  curl -s -c "$(_qbt_cookie)" -X POST "$(_qbt_base)/api/v2/auth/login" \
+       --data-urlencode "username=$(_qbt_user)" --data-urlencode "password=$(_qbt_pass)" >/dev/null
+}
+_qbt_get()    { _qbt_login >/dev/null 2>&1; curl -s -b "$(_qbt_cookie)" "$(_qbt_base)$1"; }
+_qbt_post()   { _qbt_login >/dev/null 2>&1; curl -s -b "$(_qbt_cookie)" -X POST "$(_qbt_base)$1" "${@:2}"; }
+
+qbt.url()     { echo "$(_qbt_base)"; }
+qbt.logs()    { arr.logs qbittorrent; }
+qbt.restart() { docker restart qbittorrent; }
+qbt.port.get(){ _qbt_get "/api/v2/app/preferences" | jq -r '.listen_port // empty'; }
+qbt.port.set(){ local p="${1:?port}"; _qbt_post "/api/v2/app/setPreferences" --data-urlencode "json={\"listen_port\":${p}}"; echo "listen_port -> $p"; }
+qbt.port.sync(){  # sync qB to Gluetun forwarded port (using Gluetun API)
+  local pf; pf="$(pvpn port 2>/dev/null | jq -r '.port // empty' 2>/dev/null || true)"
+  [[ -z "$pf" ]] && pf="$(pvpn port 2>/dev/null | tr -dc '0-9')"  # fallback parse
+  [[ -z "$pf" ]] && { _arr_warn "no forwarded port yet"; return 1; }
+  qbt.port.set "$pf"
+}
+qbt.list()    { _qbt_get "/api/v2/torrents/info?filter=all" | jq -r '.[].name'; }
+qbt.pause.all(){ _qbt_post "/api/v2/torrents/pause?hashes=all"; echo "paused all"; }
+qbt.resume.all(){ _qbt_post "/api/v2/torrents/resume?hashes=all"; echo "resumed all"; }
+qbt.reannounce(){ _qbt_post "/api/v2/torrents/reannounce?hashes=${1:-all}"; echo "reannounce ${1:-all}"; }
+qbt.add.url(){ local u="${1:?torrent/magnet URL}"; _qbt_post "/api/v2/torrents/add" --data-urlencode "urls=$u"; echo "added: $u"; }
+qbt.limit()   { local down="${1:-0}" up="${2:-0}"; _qbt_post "/api/v2/transfer/setDownloadLimit?limit=$down"; _qbt_post "/api/v2/transfer/setUploadLimit?limit=$up"; echo "limits -> down:$down up:$up (0=unlimited)"; }
+
+# ----------------[ Sonarr / Radarr / Prowlarr / Bazarr ]----------------
+# Optional: set API keys to enable API tasks (found in each app’s UI)
+#   export SONARR_API_KEY=xxxxx
+#   export RADARR_API_KEY=xxxxx
+#   export PROWLARR_API_KEY=xxxxx
+#   export BAZARR_API_KEY=xxxxx
+
+# ---- Common UI helpers
+sonarr.url()    { echo "$(_arr_url 127.0.0.1 8989)"; }
+radarr.url()    { echo "$(_arr_url 127.0.0.1 7878)"; }
+prowlarr.url()  { echo "$(_arr_url 127.0.0.1 9696)"; }
+bazarr.url()    { echo "$(_arr_url 127.0.0.1 6767)"; }
+
+# ---- Logs / restart
+sonarr.logs()   { arr.logs sonarr; }   ; sonarr.restart()   { docker restart sonarr; }
+radarr.logs()   { arr.logs radarr; }   ; radarr.restart()   { docker restart radarr; }
+prowlarr.logs() { arr.logs prowlarr; } ; prowlarr.restart() { docker restart prowlarr; }
+bazarr.logs()   { arr.logs bazarr; }   ; bazarr.restart()   { docker restart bazarr; }
+
+# ---- API helpers (if API keys are set)
+sonarr.api()    { curl -s -H "X-Api-Key: ${SONARR_API_KEY:?set SONARR_API_KEY}" "$(_arr_url 127.0.0.1 8989)$1" "${@:2}"; }
+radarr.api()    { curl -s -H "X-Api-Key: ${RADARR_API_KEY:?set RADARR_API_KEY}" "$(_arr_url 127.0.0.1 7878)$1" "${@:2}"; }
+prowlarr.api()  { curl -s -H "X-Api-Key: ${PROWLARR_API_KEY:?set PROWLARR_API_KEY}" "$(_arr_url 127.0.0.1 9696)$1" "${@:2}"; }
+bazarr.api()    { curl -s -H "X-Api-Key: ${BAZARR_API_KEY:?set BAZARR_API_KEY}" "$(_arr_url 127.0.0.1 6767)$1" "${@:2}"; }
+
+# ---- Common tasks (Sonarr/Radarr)
+sonarr.refresh() { sonarr.api "/api/v3/command" -H 'Content-Type: application/json' -d '{"name":"RefreshSeries"}'; echo "Sonarr: refresh series"; }
+sonarr.rss()     { sonarr.api "/api/v3/command" -H 'Content-Type: application/json' -d '{"name":"RssSync"}'; echo "Sonarr: RSS sync"; }
+radarr.refresh() { radarr.api "/api/v3/command" -H 'Content-Type: application/json' -d '{"name":"RefreshMovie"}'; echo "Radarr: refresh movies"; }
+radarr.rss()     { radarr.api "/api/v3/command" -H 'Content-Type: application/json' -d '{"name":"RssSync"}'; echo "Radarr: RSS sync"; }
+
+# ---- Prowlarr: (simple checks; full indexer mgmt available via UI)
+prowlarr.status(){ prowlarr.api "/api/v1/system/status" | jq; }
+
+# ---- Bazarr health
+bazarr.health()  { curl -fsS "$(_arr_url 127.0.0.1 6767)/api/system/status?apikey=${BAZARR_API_KEY:-}" || echo "Bazarr status requires API key"; echo; }
+
+# ----------------[ FlareSolverr ]----------------
+flare.url()     { echo "$(_arr_url 127.0.0.1 8191)"; }
+flare.health()  { curl -fsS "$(_arr_url 127.0.0.1 8191)/health" || echo "not responding"; echo; }
+flare.logs()    { arr.logs flaresolverr; }
+flare.restart() { docker restart flaresolverr; }
+
+# ----------------[ Convenience aliases ]----------------
+alias arrup='arr.up'
+alias arrdown='arr.down'
+alias arrps='arr.ps'
+alias arrlogs='arr.logs'
+alias arrtail='arr.tail'
+alias arrstats='arr.stats'
+alias arrhealth='arr.health'
+alias arrbackup='arr.backup'
+alias arropen='arr.open'
+alias arrsh='arr.shell'
+
+alias qbturl='qbt.url'
+alias qbtlogs='qbt.logs'
+alias qbtport='qbt.port.get'
+alias qbtportsync='qbt.port.sync'
+alias qbtpause='qbt.pause.all'
+alias qbtresume='qbt.resume.all'
+alias qbtreannounce='qbt.reannounce'
+alias qbtadd='qbt.add.url'
+
+alias pvpnstatus='pvpn status'
+alias pvpnconnect='pvpn connect'
+alias pvpnreconnect='pvpn reconnect'
+alias pvpnmode='pvpn mode'
+
+# End of ~/.aliasarr
