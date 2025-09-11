@@ -16,7 +16,7 @@ PVPN_SRC="${BASE}/pvpn-backup" # Put Proton files (.conf, etc.) here
 MEDIA_DIR="/media/mediasmb"
 DOWNLOADS_DIR="/home/${USER_NAME}/downloads"
 COMPLETED_DIR="${DOWNLOADS_DIR}/completed"
-MOVIES_DIR="${MEDIA_DIR}/movies"
+MOVIES_DIR="${MEDIA_DIR}/Movies"
 TV_DIR="${MEDIA_DIR}/Shows"
 SUBS_DIR="${MEDIA_DIR}/subs"
 
@@ -31,7 +31,7 @@ PGID="$(id -g)"
 TZ_AU="Australia/Sydney"
 
 # Proton defaults and selection
-SERVER_COUNTRIES="Netherlands,Germany,Switzerland"
+SERVER_COUNTRIES="Australia,Spain,Netherlands,Germany,Switzerland"
 DEFAULT_COUNTRY="Australia"
 PROTON_CREDS_FILE="${DOCKER_DIR}/gluetun/proton-credentials.conf"
 PROTON_CREDS_FBAK="${PVPN_SRC}/proton-credentials.conf"
