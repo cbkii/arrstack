@@ -34,6 +34,10 @@ TZ_AU="Australia/Sydney"
 DEFAULT_VPN_MODE="openvpn" # openvpn (recommended) | wireguard
 SERVER_COUNTRIES="Australia,Switzerland,Spain,Netherlands,Malaysia,USA"
 DEFAULT_COUNTRY="Australia"
+PROTON_CREDS_FILE="${DOCKER_DIR}/gluetun/proton-credentials.conf"
+PROTON_CREDS_FBAK="${PVPN_SRC}/proton-credentials.conf"
+DEFAULT_WG_CONF="proton.conf" # default WireGuard config filename
+GLUETUN_API_KEY=""
 
 # Service/package lists (kept at least as broad as originals)
 ALL_CONTAINERS="gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr"
@@ -52,33 +56,56 @@ NO_COLOR="${NO_COLOR:-0}"
 export BASE DOCKER_DIR STACK_DIR BACKUP_DIR PVPN_SRC
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS PUID PGID TZ_AU
-export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY
+export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK DEFAULT_WG_CONF GLUETUN_API_KEY
 
 # ----------------------------[ LOGGING ]---------------------------------------
 if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
-  C_RESET='\033[0m'; C_BOLD='\033[1m'; C_DIM='\033[2m'
-  C_RED='\033[31m'; C_GREEN='\033[32m'; C_YELLOW='\033[33m'; C_BLUE='\033[36m'
+  C_RESET='\033[0m'
+  C_BOLD='\033[1m'
+  C_DIM='\033[2m'
+  C_RED='\033[31m'
+  C_GREEN='\033[32m'
+  C_YELLOW='\033[33m'
+  C_BLUE='\033[36m'
 else
-  C_RESET=''; C_BOLD=''; C_DIM=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''
+  C_RESET=''
+  C_BOLD=''
+  C_DIM=''
+  C_RED=''
+  C_GREEN=''
+  C_YELLOW=''
+  C_BLUE=''
 fi
 step() { printf "${C_BLUE}${C_BOLD}✴️ %s${C_RESET}\n" "$1"; }
 note() { printf "${C_BLUE}➤ %s${C_RESET}\n" "$1"; }
 ok() { printf "${C_GREEN}✔ %s${C_RESET}\n" "$1"; }
 warn() { printf "${C_YELLOW}⚠ %s${C_RESET}\n" "$1"; }
 err() { printf "${C_RED}✖ %s${C_RESET}\n" "$1"; }
-die() { err "$1"; exit 1; }
+die() {
+  err "$1"
+  exit 1
+}
 trace() { [ "$DEBUG" = "1" ] && printf "${C_DIM}[trace] %s${C_RESET}\n" "$1" || true; }
 is_dry() { [[ "$DRY_RUN" = "1" ]]; }
 run_cmd() { if is_dry; then note "[DRY] $*"; else eval "$@"; fi; }
 
 # ----------------------------[ FS HELPERS ]------------------------------------
 ensure_dir() {
-  local d="$1"; trace "mkdir -p $d"
-  is_dry && { note "[DRY] mkdir -p $d"; return; }
-  mkdir -p "$d" || { sudo mkdir -p "$d"; sudo chown -R "${USER_NAME}:${USER_NAME}" "$d" || true; }
+  local d="$1"
+  trace "mkdir -p $d"
+  is_dry && {
+    note "[DRY] mkdir -p $d"
+    return
+  }
+  mkdir -p "$d" || {
+    sudo mkdir -p "$d"
+    sudo chown -R "${USER_NAME}:${USER_NAME}" "$d" || true
+  }
 }
 atomic_write() {
-  local f="$1"; local content="$2"; ensure_dir "$(dirname "$f")"
+  local f="$1"
+  local content="$2"
+  ensure_dir "$(dirname "$f")"
   if is_dry; then note "[DRY] write -> $f"; else printf "%s" "$content" >"$f"; fi
 }
 
@@ -97,15 +124,31 @@ check_deps() {
 }
 
 # ----------------------------[ CLEANUP PHASE ]---------------------------------
-compose_cmd() { ( cd "${STACK_DIR}" 2>/dev/null || return 0; run_cmd docker compose "$@" ); }
-stop_stack_if_present() { step "0B/13 Stopping any existing stack"; compose_cmd down >/dev/null 2>&1 || true; }
-stop_named_containers() { note "Removing known containers"; for c in ${ALL_CONTAINERS}; do docker ps -a --format '{{.Names}}' | grep -q "^${c}$" && run_cmd docker rm -f "$c" >/dev/null 2>&1 || true; done; }
-clear_port_conflicts() { note "Clearing port conflicts"; for p in ${CRITICAL_PORTS}; do if sudo fuser "${p}/tcp" >/dev/null 2>&1; then warn "Killing process on :$p"; run_cmd sudo fuser -k "${p}/tcp" >/dev/null 2>&1 || true; fi; done; }
+compose_cmd() { (
+  cd "${STACK_DIR}" 2>/dev/null || return 0
+  run_cmd docker compose "$@"
+); }
+stop_stack_if_present() {
+  step "0B/13 Stopping any existing stack"
+  compose_cmd down >/dev/null 2>&1 || true
+}
+stop_named_containers() {
+  note "Removing known containers"
+  for c in ${ALL_CONTAINERS}; do docker ps -a --format '{{.Names}}' | grep -q "^${c}$" && run_cmd docker rm -f "$c" >/dev/null 2>&1 || true; done
+}
+clear_port_conflicts() {
+  note "Clearing port conflicts"
+  for p in ${CRITICAL_PORTS}; do if sudo fuser "${p}/tcp" >/dev/null 2>&1; then
+    warn "Killing process on :$p"
+    run_cmd sudo fuser -k "${p}/tcp" >/dev/null 2>&1 || true
+  fi; done
+}
 stop_native_services() {
   note "Stopping native services"
   for SVC in ${ALL_NATIVE_SERVICES}; do
     if systemctl list-units --all --type=service | grep -q "${SVC}.service"; then
-      note "Stopping ${SVC}…"; run_cmd sudo systemctl stop "${SVC}" >/dev/null 2>&1 || true
+      note "Stopping ${SVC}…"
+      run_cmd sudo systemctl stop "${SVC}" >/dev/null 2>&1 || true
       run_cmd sudo systemctl disable "${SVC}" >/dev/null 2>&1 || true
       run_cmd sudo systemctl mask "${SVC}" >/dev/null 2>&1 || true
     fi
@@ -120,8 +163,11 @@ fix_permissions_on_base() {
     run_cmd sudo find "${BASE}" -name "*.log" -path "*/gluetun/*" -exec rm -f {} \; 2>/dev/null || true
     run_cmd sudo find "${BASE}" -name "*.pid" -exec rm -f {} \; 2>/dev/null || true
     run_cmd sudo find "${BASE}" -name "*.lock" -exec rm -f {} \; 2>/dev/null || true
-    note "chown -R ${USER_NAME}:${USER_NAME} ${BASE}"; run_cmd sudo chown -R "${USER_NAME}:${USER_NAME}" "${BASE}" 2>/dev/null || true
-    note "Standardising directory/file permissions"; run_cmd find "${BASE}" -type d -exec chmod 755 {} \; 2>/dev/null || true; run_cmd find "${BASE}" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    note "chown -R ${USER_NAME}:${USER_NAME} ${BASE}"
+    run_cmd sudo chown -R "${USER_NAME}:${USER_NAME}" "${BASE}" 2>/dev/null || true
+    note "Standardising directory/file permissions"
+    run_cmd find "${BASE}" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    run_cmd find "${BASE}" -type f -exec chmod 644 {} \; 2>/dev/null || true
   fi
 }
 clean_targeted_volumes() {
@@ -132,38 +178,61 @@ clean_targeted_volumes() {
 # -------------------------[ DIRECTORIES & BACKUP ]-----------------------------
 create_dirs() {
   step "1/13 Creating folders"
-  ensure_dir "${STACK_DIR}"; ensure_dir "${BACKUP_DIR}"
+  ensure_dir "${STACK_DIR}"
+  ensure_dir "${BACKUP_DIR}"
   for d in gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr scripts; do ensure_dir "${DOCKER_DIR}/${d}"; done
   for d in "${MEDIA_DIR}" "${DOWNLOADS_DIR}" "${COMPLETED_DIR}" "${MEDIA_DIR}" "${MOVIES_DIR}" "${TV_DIR}" "${SUBS_DIR}"; do ensure_dir "$d"; done
 }
 backup_configs() {
   step "2/13 Backing up ALL existing configurations"
-  local TS; TS="$(date +%Y%m%d-%H%M%S)"; BACKUP_SUBDIR="${BACKUP_DIR}/backup-${TS}"; ensure_dir "${BACKUP_SUBDIR}"
+  local TS
+  TS="$(date +%Y%m%d-%H%M%S)"
+  BACKUP_SUBDIR="${BACKUP_DIR}/backup-${TS}"
+  ensure_dir "${BACKUP_SUBDIR}"
   # Docker configs
   for APP in qbittorrent sonarr radarr prowlarr bazarr jackett lidarr readarr transmission gluetun flaresolverr; do
-    if [[ -d "${DOCKER_DIR}/${APP}" ]]; then run_cmd tar -C "${DOCKER_DIR}" -czf "${BACKUP_SUBDIR}/docker-${APP}-config.tgz" "${APP}" 2>/dev/null || true; note "Saved ${BACKUP_SUBDIR}/docker-${APP}-config.tgz"; fi
+    if [[ -d "${DOCKER_DIR}/${APP}" ]]; then
+      run_cmd tar -C "${DOCKER_DIR}" -czf "${BACKUP_SUBDIR}/docker-${APP}-config.tgz" "${APP}" 2>/dev/null || true
+      note "Saved ${BACKUP_SUBDIR}/docker-${APP}-config.tgz"
+    fi
   done
   # Home configs
   for APP in qBittorrent Sonarr Radarr Prowlarr Bazarr Jackett Lidarr Readarr transmission; do
-    if [[ -d "${HOME}/.config/${APP}" ]]; then run_cmd tar -C "${HOME}/.config" -czf "${BACKUP_SUBDIR}/home-${APP}-config.tgz" "${APP}" 2>/dev/null || true; note "Saved ${BACKUP_SUBDIR}/home-${APP}-config.tgz"; fi
+    if [[ -d "${HOME}/.config/${APP}" ]]; then
+      run_cmd tar -C "${HOME}/.config" -czf "${BACKUP_SUBDIR}/home-${APP}-config.tgz" "${APP}" 2>/dev/null || true
+      note "Saved ${BACKUP_SUBDIR}/home-${APP}-config.tgz"
+    fi
   done
   # System configs
   NATIVE_DIRS="/var/lib/sonarr /var/lib/radarr /var/lib/prowlarr /var/lib/bazarr /var/lib/jackett /var/lib/lidarr /var/lib/readarr \
 /opt/Sonarr /opt/Radarr /opt/Prowlarr /opt/Bazarr /opt/Jackett /opt/Lidarr /opt/Readarr \
 /etc/transmission-daemon"
-  for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then APP_NAME="$(basename "$D")"; run_cmd sudo tar -czf "${BACKUP_SUBDIR}/system-${APP_NAME}.tgz" "$D" 2>/dev/null || true; note "Saved ${BACKUP_SUBDIR}/system-${APP_NAME}.tgz"; fi; done
-  echo "${NATIVE_DIRS}" >"${BACKUP_SUBDIR}/_native_dirs.list"; export NATIVE_DIRS
+  for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then
+    APP_NAME="$(basename "$D")"
+    run_cmd sudo tar -czf "${BACKUP_SUBDIR}/system-${APP_NAME}.tgz" "$D" 2>/dev/null || true
+    note "Saved ${BACKUP_SUBDIR}/system-${APP_NAME}.tgz"
+  fi; done
+  echo "${NATIVE_DIRS}" >"${BACKUP_SUBDIR}/_native_dirs.list"
+  export NATIVE_DIRS
 }
 move_native_dirs() {
   step "3/13 Moving native application directories"
-  local NATIVE_MOVE_DIR="${BACKUP_SUBDIR}/native-configs"; ensure_dir "${NATIVE_MOVE_DIR}"
-  for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then run_cmd sudo mv "$D" "${NATIVE_MOVE_DIR}/$(basename "$D")" 2>/dev/null || true; note "Moved $D -> ${NATIVE_MOVE_DIR}/$(basename "$D")"; fi; done
+  local NATIVE_MOVE_DIR="${BACKUP_SUBDIR}/native-configs"
+  ensure_dir "${NATIVE_MOVE_DIR}"
+  for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then
+    run_cmd sudo mv "$D" "${NATIVE_MOVE_DIR}/$(basename "$D")" 2>/dev/null || true
+    note "Moved $D -> ${NATIVE_MOVE_DIR}/$(basename "$D")"
+  fi; done
 }
 purge_native_packages() {
   step "4/13 Purging ALL native packages"
   run_cmd sudo apt-get update -y >/dev/null 2>&1 || true
-  for PKG in ${ALL_PACKAGES}; do if dpkg -l | grep -q "^ii.*${PKG}"; then note "Purging ${PKG}…"; run_cmd sudo apt-get purge -y "${PKG}" >/dev/null 2>&1 || true; fi; done
-  run_cmd sudo apt-get autoremove -y >/dev/null 2>&1 || true; ok "Native packages purged"
+  for PKG in ${ALL_PACKAGES}; do if dpkg -l | grep -q "^ii.*${PKG}"; then
+    note "Purging ${PKG}…"
+    run_cmd sudo apt-get purge -y "${PKG}" >/dev/null 2>&1 || true
+  fi; done
+  run_cmd sudo apt-get autoremove -y >/dev/null 2>&1 || true
+  ok "Native packages purged"
 }
 final_docker_cleanup() {
   step "5/13 Final Docker cleanup pass"
@@ -172,26 +241,48 @@ final_docker_cleanup() {
 }
 
 # ---------------------------[ PROTON CREDS ]----------------------------------
-PROTON_CREDS_FILE="${DOCKER_DIR}/gluetun/proton-credentials.conf"
-PROTON_CREDS_FBAK="${PVPN_SRC}/proton-credentials.conf"
 ensure_creds_template() {
   step "6/13 Ensuring Proton credential file"
   ensure_dir "${DOCKER_DIR}/gluetun"
   if [[ ! -f "${PROTON_CREDS_FILE}" ]]; then
-    if [[ -f "${PROTON_CREDS_FBAK}" ]]; then cp "$PROTON_CREDS_FBAK" "${PROTON_CREDS_FILE}"; ok "Copied a backup to ${PROTON_CREDS_FILE}"; else
+    if [[ -f "${PROTON_CREDS_FBAK}" ]]; then
+      cp "$PROTON_CREDS_FBAK" "${PROTON_CREDS_FILE}"
+      ok "Copied a backup to ${PROTON_CREDS_FILE}"
+    else
       atomic_write "${PROTON_CREDS_FILE}" "# Proton account credentials (do NOT include +pmp here)\n# Get from https://account.proton.me/u/0/vpn/OpenVpnIKEv2\nPROTON_USER=\nPROTON_PASS=\n# Optional: WireGuard key for fallback\nWIREGUARD_PRIVATE_KEY=\nVPN_MODE=${DEFAULT_VPN_MODE}\nSERVER_COUNTRIES=${SERVER_COUNTRIES}\n"
-      warn "Edit ${PROTON_CREDS_FILE} with your Proton username (no +pmp) and password before connecting"
     fi
-  else ok "Found ${PROTON_CREDS_FILE}"; fi
+  else
+    ok "Found ${PROTON_CREDS_FILE}"
+  fi
+  if ! grep -q '^PROTON_USER=' "${PROTON_CREDS_FILE}" || ! grep -q '^PROTON_PASS=' "${PROTON_CREDS_FILE}"; then
+    local user pass
+    read -p "Proton username (without +pmp): " user
+    read -s -p "Proton password: " pass
+    echo
+    sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "${PROTON_CREDS_FILE}"
+    echo "PROTON_USER=${user}" >>"${PROTON_CREDS_FILE}"
+    echo "PROTON_PASS=${pass}" >>"${PROTON_CREDS_FILE}"
+  fi
   run_cmd chmod 600 "${PROTON_CREDS_FILE}"
 }
-ensure_pmp() { local u="$1"; case "$u" in *+pmp) printf '%s\n' "$u" ;; *) printf '%s+pmp\n' "$u" ;; esac; }
+ensure_pmp() {
+  local u="$1"
+  case "$u" in *+pmp) printf '%s\n' "$u" ;; *) printf '%s+pmp\n' "$u" ;; esac
+}
 
 # ---- WireGuard auto-seed from a .conf if present ----------------------------
-DEFAULT_WG_CONF="proton.conf"
-find_wg_conf() { local n="${1:-${DEFAULT_WG_CONF}}"; local c; for c in "${DOCKER_DIR}/gluetun/${n}" "${DOCKER_DIR}/gluetun"/*.conf "${PVPN_SRC}"/*.conf; do [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }; done; return 1; }
+find_wg_conf() {
+  local n="${1:-${DEFAULT_WG_CONF}}"
+  local c
+  for c in "${DOCKER_DIR}/gluetun/${n}" "${DOCKER_DIR}/gluetun"/*.conf "${PVPN_SRC}"/*.conf; do [[ -e "$c" ]] && {
+    printf '%s\n' "$c"
+    return 0
+  }; done
+  return 1
+}
 parse_wg_conf() {
-  local f="$1"; local k a d
+  local f="$1"
+  local k a d
   k=$(grep -E '^[[:space:]]*PrivateKey[[:space:]]*=' "$f" | sed 's/^[^=]*=\s*//' | tr -d '\r' | sed 's/[[:space:]]*$//')
   a=$(grep -E '^[[:space:]]*Address[[:space:]]*=' "$f" | sed 's/^[^=]*=\s*//' | tr -d '\r' | sed 's/[[:space:]]*$//')
   d=$(grep -E '^[[:space:]]*DNS[[:space:]]*=' "$f" | sed 's/^[^=]*=\s*//' | tr -d '\r' | sed 's/[[:space:]]*$//')
@@ -200,14 +291,16 @@ parse_wg_conf() {
 }
 
 # ------------------------------[ GLUETUN AUTH ]--------------------------------
-GLUETUN_API_KEY=""
 make_gluetun_apikey() {
   step "7/13 Generating Gluetun API key"
-  if docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey 2>/dev/null; then GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"; else GLUETUN_API_KEY="$(openssl rand -base64 48)"; fi; rm -f /tmp/gl_apikey; ok "API key generated"
+  if docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey 2>/dev/null; then GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"; else GLUETUN_API_KEY="$(openssl rand -base64 48)"; fi
+  rm -f /tmp/gl_apikey
+  ok "API key generated"
 }
 write_gluetun_auth() {
   step "8/13 Writing Gluetun RBAC config"
-  local AUTH_DIR="${DOCKER_DIR}/gluetun/auth"; ensure_dir "$AUTH_DIR"
+  local AUTH_DIR="${DOCKER_DIR}/gluetun/auth"
+  ensure_dir "$AUTH_DIR"
   local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="public"\nauth="none"\nroutes=["GET /v1/publicip/ip"]\n\n[[roles]]\nname="port-monitor"\nauth="apikey"\napikey="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/publicip/ip","GET /v1/openvpn/portforwarded","GET /v1/wireguard/portforwarded","GET /v1/openvpn/status","GET /v1/wireguard/status"]\n'
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
 }
@@ -215,7 +308,8 @@ write_gluetun_auth() {
 # ---------------------------[ PORT MONITOR ]-----------------------------------
 create_pf_monitor() {
   step "9/13 Creating PF monitor script"
-  local F="${DOCKER_DIR}/scripts/port-monitor.sh"; ensure_dir "${DOCKER_DIR}/scripts"
+  local F="${DOCKER_DIR}/scripts/port-monitor.sh"
+  ensure_dir "${DOCKER_DIR}/scripts"
   cat >"$F" <<'SCRIPT'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -228,13 +322,15 @@ set_qbt(){ local np="$1"; curl -fsS "http://${QBT_HOST}:${QBT_PORT}/api/v2/app/s
 main(){ log "PF monitor started"; while :; do pf="$(get_pf||true)"; if [ -n "$pf" ]; then cur="$(get_qbt||true)"; if [ "$cur" != "$pf" ]; then log "Updating qB listen port ${cur:-N/A} -> $pf"; set_qbt "$pf"; else log "qB listen port already $pf"; fi; else log "No forwarded port yet"; fi; sleep "$CHECK_INTERVAL"; done }
 main "$@"
 SCRIPT
-  run_cmd chmod +x "$F"; ok "Wrote $F"
+  run_cmd chmod +x "$F"
+  ok "Wrote $F"
 }
 
 # ------------------------------[ .ENV FILE ]-----------------------------------
 write_env() {
   step "10/13 Writing stack .env"
-  local envf="${STACK_DIR}/.env"; ensure_dir "${STACK_DIR}"
+  local envf="${STACK_DIR}/.env"
+  ensure_dir "${STACK_DIR}"
   local PU="" PP="" WG="" VM="${DEFAULT_VPN_MODE}" CN="${SERVER_COUNTRIES}"
   if [[ -f "${PROTON_CREDS_FILE}" ]]; then
     PU="$(grep -E '^PROTON_USER=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || true)"
@@ -243,7 +339,8 @@ write_env() {
     VM="$(grep -E '^VPN_MODE=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || echo "${DEFAULT_VPN_MODE}")"
     CN="$(grep -E '^SERVER_COUNTRIES=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || echo "${SERVER_COUNTRIES}")"
   fi
-  local OPENVPN_USER=""; [[ -n "$PU" ]] && OPENVPN_USER="$(ensure_pmp "$PU")"
+  local OPENVPN_USER=""
+  [[ -n "$PU" ]] && OPENVPN_USER="$(ensure_pmp "$PU")"
   cat >"${envf}" <<EOF
 # IDs & timezone
 PUID=${PUID}
@@ -278,7 +375,8 @@ OPENVPN_USER=${OPENVPN_USER}
 # WireGuard fallback
 WIREGUARD_PRIVATE_KEY=${WG}
 EOF
-  run_cmd chmod 600 "${envf}"; ok "Wrote ${envf}"
+  run_cmd chmod 600 "${envf}"
+  ok "Wrote ${envf}"
 }
 
 # ---------------------------[ COMPOSE FILE ]-----------------------------------
@@ -436,15 +534,33 @@ validate_creds_or_die() {
   local PU PP ENVF="${STACK_DIR}/.env"
   PU="$(grep -E '^PROTON_USER=' "$ENVF" | cut -d= -f2- || true)"
   PP="$(grep -E '^PROTON_PASS=' "$ENVF" | cut -d= -f2- || true)"
-  if [[ -z "${PU}" || -z "${PP}" ]]; then err "Proton credentials missing. Edit ${PROTON_CREDS_FILE} then re-run."; exit 2; fi
-  local OU; OU="$(grep -E '^OPENVPN_USER=' "$ENVF" | cut -d= -f2- || true)"
-  if [[ -z "$OU" || "$OU" != *+pmp ]]; then warn "Fixing OPENVPN_USER to include +pmp"; sed -i '/^OPENVPN_USER=/d' "$ENVF"; echo "OPENVPN_USER=$(ensure_pmp "$PU")" >>"$ENVF"; fi
+  if [[ -z "${PU}" || -z "${PP}" ]]; then
+    err "Proton credentials missing. Edit ${PROTON_CREDS_FILE} then re-run."
+    exit 2
+  fi
+  local OU
+  OU="$(grep -E '^OPENVPN_USER=' "$ENVF" | cut -d= -f2- || true)"
+  if [[ -z "$OU" || "$OU" != *+pmp ]]; then
+    warn "Fixing OPENVPN_USER to include +pmp"
+    sed -i '/^OPENVPN_USER=/d' "$ENVF"
+    echo "OPENVPN_USER=$(ensure_pmp "$PU")" >>"$ENVF"
+  fi
 }
-pull_images() { step "12/13 Pulling images"; compose_cmd pull || warn "Pull failed; will rely on up"; }
+pull_images() {
+  step "12/13 Pulling images"
+  compose_cmd pull || warn "Pull failed; will rely on up"
+}
 start_with_checks() {
   step "13/13 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
-  local MAX_RETRIES=5 RETRY=0 VMODE; VMODE="$(grep -E '^VPN_MODE=' "${STACK_DIR}/.env" | cut -d= -f2- || echo openvpn)"
+  local MAX_RETRIES=5 RETRY=0 VMODE
+  VMODE="$(grep -E '^VPN_MODE=' "${STACK_DIR}/.env" | cut -d= -f2- || echo openvpn)"
+  if [[ "$VMODE" != openvpn ]]; then
+    warn "Forcing VPN_MODE to openvpn for Proton port-forwarding"
+    VMODE="openvpn"
+    sed -i '/^VPN_MODE=/d' "${STACK_DIR}/.env"
+    echo "VPN_MODE=${VMODE}" >>"${STACK_DIR}/.env"
+  fi
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES} (mode: ${VMODE})"
     compose_cmd up -d gluetun || warn "gluetun up failed"
@@ -453,22 +569,35 @@ start_with_checks() {
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
       IP="$(docker exec gluetun wget -qO- http://localhost:8000/v1/publicip/ip 2>/dev/null || true)"
       if [[ "$VMODE" = "openvpn" ]]; then PF="$(docker exec gluetun wget -qO- http://localhost:8000/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"; else PF="$(docker exec gluetun wget -qO- http://localhost:8000/v1/wireguard/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"; fi
-      [[ "$HEALTH" = healthy && -n "$IP" && ( "$VMODE" = wireguard || ( -n "$PF" && "$PF" -gt 1024 ) ) ]] && break
-      sleep 5; waited=$((waited + 5))
+      [[ "$HEALTH" = healthy && -n "$IP" && ("$VMODE" = wireguard || (-n "$PF" && "$PF" -gt 1024)) ]] && break
+      sleep 5
+      waited=$((waited + 5))
     done
-    if [[ "$HEALTH" = healthy && -n "$IP" ]]; then ok "Gluetun healthy; IP: ${IP}${PF:+, PF: ${PF}}"; break; fi
-    warn "Gluetun not healthy yet; down & retry"; compose_cmd down >/dev/null 2>&1 || true; clear_port_conflicts; RETRY=$((RETRY + 1))
+    if [[ "$HEALTH" = healthy && -n "$IP" ]]; then
+      ok "Gluetun healthy; IP: ${IP}${PF:+, PF: ${PF}}"
+      break
+    fi
+    warn "Gluetun not healthy yet; down & retry"
+    compose_cmd down >/dev/null 2>&1 || true
+    clear_port_conflicts
+    RETRY=$((RETRY + 1))
   done
-  if [[ "$HEALTH" != healthy ]]; then err "Gluetun did not achieve connectivity; check: docker logs gluetun"; exit 3; fi
+  if [[ "$HEALTH" != healthy ]]; then
+    err "Gluetun did not achieve connectivity; check: docker logs gluetun"
+    exit 3
+  fi
   compose_cmd up -d qbittorrent sonarr radarr prowlarr bazarr flaresolverr || die "Failed to start stack"
   compose_cmd ps || true
-  note "Public IP:"; curl -fsS http://127.0.0.1:8000/v1/publicip/ip || true
-  note "Forwarded port:"; curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || curl -fsS http://127.0.0.1:8000/v1/wireguard/portforwarded || true
+  note "Public IP:"
+  curl -fsS http://127.0.0.1:8000/v1/publicip/ip || true
+  note "Forwarded port:"
+  curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || curl -fsS http://127.0.0.1:8000/v1/wireguard/portforwarded || true
 }
 
 # ------------------------------[ HELPERS ]-------------------------------------
 install_pvpn_helper() {
-  local F="${BASE}/.vpn_aliases"; cat >"$F" <<'PVPN'
+  local F="${BASE}/.vpn_aliases"
+  cat >"$F" <<'PVPN'
 # Helper for ProtonVPN + Gluetun control
 pvpn(){
   local cmd="${1:-}"; shift || true
@@ -496,8 +625,10 @@ USAGE
   esac
 }
 PVPN
-  local SHELLRC="/home/${USER_NAME}/.bashrc"; local SRC="[ -f ${F} ] && source ${F}"
-  grep -Fq "$SRC" "$SHELLRC" 2>/dev/null || echo "$SRC" >>"$SHELLRC"; ok "pvpn helper installed"
+  local SHELLRC="/home/${USER_NAME}/.bashrc"
+  local SRC="[ -f ${F} ] && source ${F}"
+  grep -Fq "$SRC" "$SHELLRC" 2>/dev/null || echo "$SRC" >>"$SHELLRC"
+  ok "pvpn helper installed"
 }
 
 # --------------------------------[ MAIN ]--------------------------------------
@@ -536,7 +667,10 @@ main() {
   pull_images
   start_with_checks
   install_pvpn_helper
-  echo; ok "Done. Next steps:"; echo "  • Edit ${PROTON_CREDS_FILE} (username WITHOUT +pmp) if you haven't already."; echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (default ${QBT_USER}/${QBT_PASS})."
+  echo
+  ok "Done. Next steps:"
+  echo "  • Edit ${PROTON_CREDS_FILE} (username WITHOUT +pmp) if you haven't already."
+  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (default ${QBT_USER}/${QBT_PASS})."
 }
 
 main "$@"
