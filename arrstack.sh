@@ -2,7 +2,7 @@
 # =============================================================================
 #  ARR+VPN STACK INSTALLER
 # =============================================================================
-set -e pipefail
+set -euo pipefail
 
 # ----------------------------[ USER CONFIG ]-----------------------------------
 USER_NAME="${USER:-$(id -un)}"
@@ -31,12 +31,11 @@ PGID="$(id -g)"
 TZ_AU="Australia/Sydney"
 
 # Proton defaults and selection
-DEFAULT_VPN_MODE="openvpn" # openvpn (recommended) | wireguard
-SERVER_COUNTRIES="Australia,Switzerland,Spain,Netherlands,Malaysia,USA"
+DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
+SERVER_COUNTRIES="Netherlands,Germany,Switzerland"
 DEFAULT_COUNTRY="Australia"
 PROTON_CREDS_FILE="${DOCKER_DIR}/gluetun/proton-credentials.conf"
 PROTON_CREDS_FBAK="${PVPN_SRC}/proton-credentials.conf"
-DEFAULT_WG_CONF="proton.conf" # default WireGuard config filename
 GLUETUN_API_KEY=""
 
 # Service/package lists (kept at least as broad as originals)
@@ -45,7 +44,7 @@ ALL_NATIVE_SERVICES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbitto
 ALL_PACKAGES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common"
 
 # Critical host ports we may free up
-CRITICAL_PORTS="8080 8989 7878 9696 6767 8191 6881 8000"
+CRITICAL_PORTS="8080 8989 7878 9696 6767 8191 8000"
 
 # Runtime flags
 DRY_RUN="${DRY_RUN:-0}"
@@ -56,7 +55,7 @@ NO_COLOR="${NO_COLOR:-0}"
 export BASE DOCKER_DIR STACK_DIR BACKUP_DIR PVPN_SRC
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS PUID PGID TZ_AU
-export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK DEFAULT_WG_CONF GLUETUN_API_KEY
+export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK GLUETUN_API_KEY
 
 # ----------------------------[ LOGGING ]---------------------------------------
 if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
@@ -272,17 +271,14 @@ ensure_pmp() {
 
 # ---- WireGuard auto-seed from a .conf if present ----------------------------
 find_wg_conf() {
-  local n="${1:-${DEFAULT_WG_CONF}}"
-  local c
-  for c in "${DOCKER_DIR}/gluetun/${n}" "${DOCKER_DIR}/gluetun"/*.conf "${PVPN_SRC}"/*.conf; do [[ -e "$c" ]] && {
-    printf '%s\n' "$c"
-    return 0
-  }; done
+  local n="${1:-proton.conf}" c
+  for c in "${DOCKER_DIR}/gluetun/${n}" "${DOCKER_DIR}/gluetun"/*.conf "${PVPN_SRC}"/*.conf; do
+    [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }
+  done
   return 1
 }
 parse_wg_conf() {
-  local f="$1"
-  local k a d
+  local f="$1" k a d
   k=$(grep -E '^[[:space:]]*PrivateKey[[:space:]]*=' "$f" | sed 's/^[^=]*=\s*//' | tr -d '\r' | sed 's/[[:space:]]*$//')
   a=$(grep -E '^[[:space:]]*Address[[:space:]]*=' "$f" | sed 's/^[^=]*=\s*//' | tr -d '\r' | sed 's/[[:space:]]*$//')
   d=$(grep -E '^[[:space:]]*DNS[[:space:]]*=' "$f" | sed 's/^[^=]*=\s*//' | tr -d '\r' | sed 's/[[:space:]]*$//')
@@ -301,7 +297,7 @@ write_gluetun_auth() {
   step "8/13 Writing Gluetun RBAC config"
   local AUTH_DIR="${DOCKER_DIR}/gluetun/auth"
   ensure_dir "$AUTH_DIR"
-  local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="public"\nauth="none"\nroutes=["GET /v1/publicip/ip"]\n\n[[roles]]\nname="port-monitor"\nauth="apikey"\napikey="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/publicip/ip","GET /v1/openvpn/portforwarded","GET /v1/wireguard/portforwarded","GET /v1/openvpn/status","GET /v1/wireguard/status"]\n'
+  local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="public"\nauth="none"\nroutes=["GET /v1/publicip/ip"]\n\n[[roles]]\nname="port-monitor"\nauth="apikey"\napikey="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/publicip/ip","GET /v1/openvpn/portforwarded","GET /v1/openvpn/status","GET /v1/wireguard/portforwarded","GET /v1/wireguard/status"]\n'
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
 }
 
@@ -314,12 +310,17 @@ create_pf_monitor() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 QBT_HOST="localhost"; QBT_PORT="8080"; QBT_USER="${QBT_USER:-admin}"; QBT_PASS="${QBT_PASS:-adminadmin}"
-GLUETUN_API="http://localhost:8000"; LOG_FILE="/config/port-monitor.log"; CHECK_INTERVAL=300
+GLUETUN_API="http://localhost:8000"; LOG_FILE="/config/port-monitor.log"; CHECK_INTERVAL=45; STAMP="/config/pf.port"
 log(){ echo "[$(date +%F' '%T)] $*" | tee -a "$LOG_FILE"; }
-get_pf(){ local p=""; p=$(curl -fsS "$GLUETUN_API/v1/openvpn/portforwarded"|jq -r '.port//empty'||true); [[ -z "$p" ]] && p=$(curl -fsS "$GLUETUN_API/v1/wireguard/portforwarded"|jq -r '.port//empty'||true); [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -gt 1024 ] && [ "$p" -lt 65536 ] && { echo "$p"; return 0; }; return 1; }
+get_pf(){
+  local p=""
+  p=$(curl -fsS "$GLUETUN_API/v1/openvpn/portforwarded" | jq -r '.port//empty' 2>/dev/null || true)
+  [[ -n "$p" ]] || p=$(curl -fsS "$GLUETUN_API/v1/wireguard/portforwarded" | jq -r '.port//empty' 2>/dev/null || true)
+  echo "$p" | grep -E '^[0-9]+$' | awk '$1>1024 && $1<65536{print$1}'
+}
 get_qbt(){ curl -fsS "http://${QBT_HOST}:${QBT_PORT}/api/v2/app/preferences" --data "username=${QBT_USER}&password=${QBT_PASS}"|jq -r '.listen_port//empty'||true; }
-set_qbt(){ local np="$1"; curl -fsS "http://${QBT_HOST}:${QBT_PORT}/api/v2/app/setPreferences" --data "username=${QBT_USER}&password=${QBT_PASS}" --data-urlencode "json={\"listen_port\":${np}}" >/dev/null 2>&1; }
-main(){ log "PF monitor started"; while :; do pf="$(get_pf||true)"; if [ -n "$pf" ]; then cur="$(get_qbt||true)"; if [ "$cur" != "$pf" ]; then log "Updating qB listen port ${cur:-N/A} -> $pf"; set_qbt "$pf"; else log "qB listen port already $pf"; fi; else log "No forwarded port yet"; fi; sleep "$CHECK_INTERVAL"; done }
+set_qbt(){ local np="$1"; curl -fsS "http://${QBT_HOST}:${QBT_PORT}/api/v2/app/setPreferences" --data "username=${QBT_USER}&password=${QBT_PASS}" --data-urlencode "json={\"listen_port\":${np},\"upnp\":false}" >/dev/null 2>&1; }
+main(){ log "PF monitor started"; while :; do pf="$(get_pf||true)"; if [ -n "$pf" ]; then cur="$(get_qbt||true)"; if [ "$cur" != "$pf" ]; then log "Updating qB listen port ${cur:-N/A} -> $pf"; set_qbt "$pf" && echo "$pf" >"$STAMP"; else [ -f "$STAMP" ] || echo "$pf" >"$STAMP"; log "qB listen port already $pf"; fi; else log "No forwarded port yet"; rm -f "$STAMP"; fi; sleep "$CHECK_INTERVAL"; done }
 main "$@"
 SCRIPT
   run_cmd chmod +x "$F"
@@ -394,13 +395,10 @@ services:
       - TZ=${TZ}
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=${VPN_MODE}
-      # OpenVPN (default)
       - OPENVPN_USER=${OPENVPN_USER}
       - OPENVPN_PASSWORD=${PROTON_PASS}
-      # WireGuard (fallback only)
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
       - WIREGUARD_MTU=1320
-      # Port forwarding and selection
       - VPN_PORT_FORWARDING=on
       - VPN_PORT_FORWARDING_PROVIDER=protonvpn
       - PORT_FORWARD_ONLY=on
@@ -421,13 +419,24 @@ services:
     ports:
       - "127.0.0.1:8000:8000"          # Gluetun control API (host-local)
       - "${QBT_HTTP_PORT_HOST}:8080"   # qB WebUI via gluetun namespace
-      - "6881:6881"
-      - "6881:6881/udp"
+      - "8989:8989"                    # Sonarr
+      - "7878:7878"                    # Radarr
+      - "9696:9696"                    # Prowlarr
+      - "6767:6767"                    # Bazarr
+      - "8191:8191"                    # FlareSolverr
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/publicip/ip"]
+      test: |
+        proto="${VPN_TYPE:-openvpn}";
+        curl -fsS http://localhost:8000/v1/publicip/ip &&
+        if [ "$proto" = "openvpn" ]; then
+          curl -fsS http://localhost:8000/v1/openvpn/status &&
+          curl -fsS http://localhost:8000/v1/openvpn/portforwarded;
+        else
+          curl -fsS http://localhost:8000/v1/wireguard/status;
+        fi
       interval: 30s
       timeout: 15s
-      retries: 3
+      retries: 5
       start_period: 60s
     restart: unless-stopped
 
@@ -441,6 +450,7 @@ services:
       - TZ=${TZ}
       - WEBUI_PORT=8080
       - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
+      - VPN_TYPE=${VPN_MODE}
     volumes:
       - ${DOCKER_DIR}/qbittorrent:/config
       - ${DOWNLOADS_DIR}:/downloads
@@ -449,9 +459,15 @@ services:
     depends_on:
       gluetun:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/v2/app/version >/dev/null && ( [ \"$VPN_TYPE\" != 'openvpn' ] || [ -f /config/pf.port ] )"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     command: |
       /bin/bash -c '
-        /scripts/port-monitor.sh &
+        if [ "$VPN_TYPE" = "openvpn" ]; then /scripts/port-monitor.sh & fi
         exec /init
       '
     restart: unless-stopped
@@ -459,6 +475,7 @@ services:
   sonarr:
     image: ghcr.io/hotio/sonarr:release
     container_name: sonarr
+    network_mode: "service:gluetun"
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -468,13 +485,23 @@ services:
       - ${TV_DIR}:/tv
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
-    ports:
-      - "8989:8989"
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8989 >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   radarr:
     image: ghcr.io/hotio/radarr:release
     container_name: radarr
+    network_mode: "service:gluetun"
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -484,26 +511,44 @@ services:
       - ${MOVIES_DIR}:/movies
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
-    ports:
-      - "7878:7878"
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7878 >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
+    network_mode: "service:gluetun"
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
       - ${DOCKER_DIR}/prowlarr:/config
-    ports:
-      - "9696:9696"
+    depends_on:
+      qbittorrent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9696 >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
     container_name: bazarr
+    network_mode: "service:gluetun"
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -513,17 +558,34 @@ services:
       - ${TV_DIR}:/tv
       - ${MOVIES_DIR}:/movies
       - ${SUBS_DIR}:/subs
-    ports:
-      - "6767:6767"
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6767 >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
+    network_mode: "service:gluetun"
     environment:
       - LOG_LEVEL=info
-    ports:
-      - "8191:8191"
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8191 >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 YAML
   ok "Wrote ${STACK_DIR}/docker-compose.yml"
@@ -553,23 +615,16 @@ pull_images() {
 start_with_checks() {
   step "13/13 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
-  local MAX_RETRIES=5 RETRY=0 VMODE
-  VMODE="$(grep -E '^VPN_MODE=' "${STACK_DIR}/.env" | cut -d= -f2- || echo openvpn)"
-  if [[ "$VMODE" != openvpn ]]; then
-    warn "Forcing VPN_MODE to openvpn for Proton port-forwarding"
-    VMODE="openvpn"
-    sed -i '/^VPN_MODE=/d' "${STACK_DIR}/.env"
-    echo "VPN_MODE=${VMODE}" >>"${STACK_DIR}/.env"
-  fi
+  local MAX_RETRIES=5 RETRY=0
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
-    note "→ Attempt $((RETRY + 1))/${MAX_RETRIES} (mode: ${VMODE})"
+    note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
     compose_cmd up -d gluetun || warn "gluetun up failed"
     local waited=0 HEALTH="unknown" IP="" PF=""
     while [[ $waited -lt 180 ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
       IP="$(docker exec gluetun wget -qO- http://localhost:8000/v1/publicip/ip 2>/dev/null || true)"
-      if [[ "$VMODE" = "openvpn" ]]; then PF="$(docker exec gluetun wget -qO- http://localhost:8000/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"; else PF="$(docker exec gluetun wget -qO- http://localhost:8000/v1/wireguard/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"; fi
-      [[ "$HEALTH" = healthy && -n "$IP" && ("$VMODE" = wireguard || (-n "$PF" && "$PF" -gt 1024)) ]] && break
+      PF="$(docker exec gluetun wget -qO- http://localhost:8000/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"
+      [[ "$HEALTH" = healthy && -n "$IP" && -n "$PF" && "$PF" -gt 1024 ]] && break
       sleep 5
       waited=$((waited + 5))
     done
@@ -586,12 +641,12 @@ start_with_checks() {
     err "Gluetun did not achieve connectivity; check: docker logs gluetun"
     exit 3
   fi
-  compose_cmd up -d qbittorrent sonarr radarr prowlarr bazarr flaresolverr || die "Failed to start stack"
+  compose_cmd up -d qbittorrent prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
   compose_cmd ps || true
   note "Public IP:"
   curl -fsS http://127.0.0.1:8000/v1/publicip/ip || true
   note "Forwarded port:"
-  curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || curl -fsS http://127.0.0.1:8000/v1/wireguard/portforwarded || true
+  curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || true
 }
 
 # ------------------------------[ HELPERS ]-------------------------------------
@@ -603,22 +658,19 @@ pvpn(){
   local cmd="${1:-}"; shift || true
   local BASE="/home/${USER:-$(id -un)}/srv"; local STACK_DIR="${BASE}/arr-stack"; local ENV_FILE="${STACK_DIR}/.env"; local CREDS_FILE="${BASE}/docker/gluetun/proton-credentials.conf"
   _get(){ grep -E "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true; }
-  _set(){ local k="$1" v="$2"; touch "$ENV_FILE"; sed -i "/^${k}=/d" "$ENV_FILE"; [ -n "$v" ] && echo "${k}=${v}" >>"$ENV_FILE"; }
   _restart(){ (cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" restart gluetun) }
   case "$cmd" in
     c|connect) echo "Starting gluetun + qB…"; (cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" up -d gluetun qbittorrent) || return 1;;
     r|reconnect) _restart || return 1;;
-    mode) case "${1:-}" in openvpn|ovpn) _set VPN_MODE openvpn; _restart;; wireguard|wg) _set VPN_MODE wireguard; _restart;; *) echo "Usage: pvpn mode [openvpn|wireguard]"; return 1;; esac;;
     creds) local user pass; read -p "Proton username (without +pmp): " user; read -s -p "Password: " pass; echo; sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "$CREDS_FILE" 2>/dev/null || true; echo "PROTON_USER=${user}" >>"$CREDS_FILE"; echo "PROTON_PASS=${pass}" >>"$CREDS_FILE"; sed -i '/^OPENVPN_USER=/d' "$ENV_FILE" 2>/dev/null || true; echo "OPENVPN_USER=${user}+pmp" >>"$ENV_FILE"; echo "PROTON_PASS=${pass}" >>"$ENV_FILE"; echo "Updated creds. Restarting gluetun…"; _restart;;
-    s|status) echo "-- Gluetun --"; docker ps --filter name=gluetun --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | tail -n +1; echo "-- Public IP --"; curl -fsS localhost:8000/v1/publicip/ip || echo N/A; echo "-- Forwarded port --"; if [ "$( _get VPN_MODE )" = "openvpn" ]; then curl -fsS localhost:8000/v1/openvpn/portforwarded || echo N/A; else curl -fsS localhost:8000/v1/wireguard/portforwarded || echo N/A; fi; echo "-- qB listen --"; curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/preferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" 2>/dev/null | jq -r '.listen_port // empty' || echo N/A;;
-    portsync) local pf; pf=$(curl -fsS localhost:8000/v1/openvpn/portforwarded 2>/dev/null | jq -r '.port // empty' || curl -fsS localhost:8000/v1/wireguard/portforwarded 2>/dev/null | jq -r '.port // empty' || true); [ -n "$pf" ] && curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/setPreferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" --data-urlencode "json={\"listen_port\":${pf}}" >/dev/null 2>&1 && echo "qB port set to ${pf}" || echo "No PF yet";;
+    s|status) echo "-- Gluetun --"; docker ps --filter name=gluetun --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | tail -n +1; echo "-- Public IP --"; curl -fsS localhost:8000/v1/publicip/ip || echo N/A; echo "-- Forwarded port --"; curl -fsS localhost:8000/v1/openvpn/portforwarded || echo N/A; echo "-- qB listen --"; curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/preferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" 2>/dev/null | jq -r '.listen_port // empty' || echo N/A;;
+    portsync) local pf; pf=$(curl -fsS localhost:8000/v1/openvpn/portforwarded 2>/dev/null | jq -r '.port // empty' || true); [ -n "$pf" ] && curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/setPreferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" --data-urlencode "json={\"listen_port\":${pf},\"upnp\":false}" >/dev/null 2>&1 && echo "qB port set to ${pf}" || echo "No PF yet";;
     *) cat <<USAGE
 Usage: pvpn <command>
   c, connect         Start gluetun + qB
   r, reconnect       Restart gluetun
-  mode <ovpn|wg>     Switch VPN mode (ovpn default)
   creds              Update Proton creds (enforces +pmp)
-  s, status          Show mode, public IP, forwarded port, qB listen port
+  s, status          Show public IP, forwarded port, qB listen port
   portsync           Sync qB listen port now
 USAGE
        ;;
@@ -651,7 +703,7 @@ main() {
   write_gluetun_auth
   create_pf_monitor
   write_env
-  # Optional: auto-seed WG from .conf if .env lacks it
+  # Optional: auto-seed WG key from a .conf if none set
   if ! grep -q '^WIREGUARD_PRIVATE_KEY=' "${STACK_DIR}/.env" || [[ -z "$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${STACK_DIR}/.env" | cut -d= -f2-)" ]]; then
     if CONF="$(find_wg_conf || true)"; then
       if read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null); then
