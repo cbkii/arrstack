@@ -426,14 +426,9 @@ services:
       - "8191:8191"                    # FlareSolverr
     healthcheck:
       test: |
-        proto="${VPN_TYPE:-openvpn}";
         curl -fsS http://localhost:8000/v1/publicip/ip &&
-        if [ "$proto" = "openvpn" ]; then
-          curl -fsS http://localhost:8000/v1/openvpn/status &&
-          curl -fsS http://localhost:8000/v1/openvpn/portforwarded;
-        else
-          curl -fsS http://localhost:8000/v1/wireguard/status;
-        fi
+        curl -fsS http://localhost:8000/v1/openvpn/status &&
+        curl -fsS http://localhost:8000/v1/openvpn/portforwarded | jq -e '.port | tonumber > 1024'
       interval: 30s
       timeout: 15s
       retries: 5
