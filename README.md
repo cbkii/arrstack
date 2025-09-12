@@ -140,7 +140,7 @@ docker compose up -d
 | --------------- | ---- | ------------------------------------- |
 | qBittorrent UI  | 8080 | via Gluetun’s network namespace       |
 | Gluetun Control | 8000 | bound to `127.0.0.1` (localhost only) |
-| BitTorrent (PF) | 6881 | TCP/UDP; qB listen port auto-synced   |
+| BitTorrent (PF) | dynamic | Proton-assigned; no host binding |
 | Sonarr          | 8989 |                                       |
 | Radarr          | 7878 |                                       |
 | Prowlarr        | 9696 |                                       |
