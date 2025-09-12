@@ -12,7 +12,7 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 - **qBittorrent** in Gluetun’s network namespace.
 - **Auto Port-Forward monitor** that keeps qBittorrent’s listen port in sync.
 - **Sonarr, Radarr, Prowlarr, Bazarr, FlareSolverr**.
-- A small **`pvpn` helper** to switch modes, check status, and sync the port.
+- A comprehensive **`.aliasarr`** helper with `pvpn` and stack aliases.
 
 ---
 
@@ -64,7 +64,7 @@ sudo systemctl enable --now docker
 ## Default folders & mapping
 
 * Base: `~/srv`
-* Compose & `.env`: `~/srv/arrstack`
+* Compose & `.env`: `~/srv/arr-stack`
 * App data: `~/srv/docker/<service>`
 * Downloads: `~/downloads` → mounted in qB as `/downloads`
 * Completed: `~/downloads/completed` → `/completed`
@@ -79,14 +79,15 @@ In each Arr app, add the **qBittorrent** client and make sure paths match these 
 
 ## Daily use
 
-The script creates a helper you can use after opening a new shell:
+The installer drops helper aliases at `~/srv/arr-stack/.aliasarr` and sources them from `~/.zshrc`:
 
 ```bash
-source ~/srv/.vpn_aliases   # auto-added to .bashrc for future sessions
-pvpn status                 # show mode, public IP, forwarded port, qB listen port
+# already added to ~/.zshrc
+[ -f ~/srv/arr-stack/.aliasarr ] && source ~/srv/arr-stack/.aliasarr
+pvpn status   # show mode, public IP, forwarded port
 ```
 
-Common commands:
+Common `pvpn` commands:
 
 ```bash
 pvpn connect      # start Gluetun + qBittorrent
@@ -127,7 +128,7 @@ The installer is safe to re-run; it will pull new images and start cleanly:
 Or:
 
 ```bash
-cd ~/srv/arrstack
+cd ~/srv/arr-stack
 docker compose pull
 docker compose up -d
 ```
@@ -157,10 +158,10 @@ docker compose up -d
 * **Forwarded port (OpenVPN):** `curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded`
 * **Force qB to current PF:** `pvpn portsync`
 
-If you change default folders/ports in the script, update the mounts/ports in `~/srv/arrstack/docker-compose.yml` accordingly and run:
+If you change default folders/ports in the script, update the mounts/ports in `~/srv/arr-stack/docker-compose.yml` accordingly and run:
 
 ```bash
-cd ~/srv/arrstack
+cd ~/srv/arr-stack
 docker compose up -d
 ```
 
@@ -171,7 +172,7 @@ docker compose up -d
 Stop the stack:
 
 ```bash
-cd ~/srv/arrstack
+cd ~/srv/arr-stack
 docker compose down
 ```
 

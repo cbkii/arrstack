@@ -644,38 +644,29 @@ start_with_checks() {
   curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || true
 }
 
-# ------------------------------[ HELPERS ]-------------------------------------
-install_pvpn_helper() {
-  local F="${BASE}/.vpn_aliases"
-  cat >"$F" <<'PVPN'
-# Helper for ProtonVPN + Gluetun control
-pvpn(){
-  local cmd="${1:-}"; shift || true
-  local BASE="/home/${USER:-$(id -un)}/srv"; local STACK_DIR="${BASE}/arr-stack"; local ENV_FILE="${STACK_DIR}/.env"; local CREDS_FILE="${BASE}/docker/gluetun/proton-credentials.conf"
-  _get(){ grep -E "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true; }
-  _restart(){ (cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" restart gluetun) }
-  case "$cmd" in
-    c|connect) echo "Starting gluetun + qB…"; (cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" up -d gluetun qbittorrent) || return 1;;
-    r|reconnect) _restart || return 1;;
-    creds) local user pass; read -p "Proton username (without +pmp): " user; read -s -p "Password: " pass; echo; sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "$CREDS_FILE" 2>/dev/null || true; echo "PROTON_USER=${user}" >>"$CREDS_FILE"; echo "PROTON_PASS=${pass}" >>"$CREDS_FILE"; sed -i '/^OPENVPN_USER=/d' "$ENV_FILE" 2>/dev/null || true; echo "OPENVPN_USER=${user}+pmp" >>"$ENV_FILE"; echo "PROTON_PASS=${pass}" >>"$ENV_FILE"; echo "Updated creds. Restarting gluetun…"; _restart;;
-    s|status) echo "-- Gluetun --"; docker ps --filter name=gluetun --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | tail -n +1; echo "-- Public IP --"; curl -fsS localhost:8000/v1/publicip/ip || echo N/A; echo "-- Forwarded port --"; curl -fsS localhost:8000/v1/openvpn/portforwarded || echo N/A; echo "-- qB listen --"; curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/preferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" 2>/dev/null | jq -r '.listen_port // empty' || echo N/A;;
-    portsync) local pf; pf=$(curl -fsS localhost:8000/v1/openvpn/portforwarded 2>/dev/null | jq -r '.port // empty' || true); [ -n "$pf" ] && curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/setPreferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" --data-urlencode "json={\"listen_port\":${pf},\"upnp\":false}" >/dev/null 2>&1 && echo "qB port set to ${pf}" || echo "No PF yet";;
-    *) cat <<USAGE
-Usage: pvpn <command>
-  c, connect         Start gluetun + qB
-  r, reconnect       Restart gluetun
-  creds              Update Proton creds (enforces +pmp)
-  s, status          Show public IP, forwarded port, qB listen port
-  portsync           Sync qB listen port now
-USAGE
-       ;;
-  esac
-}
-PVPN
-  local SHELLRC="/home/${USER_NAME}/.bashrc"
-  local SRC="[ -f ${F} ] && source ${F}"
-  grep -Fq "$SRC" "$SHELLRC" 2>/dev/null || echo "$SRC" >>"$SHELLRC"
-  ok "pvpn helper installed"
+
+install_aliases() {
+  step "Installing ARR helper aliases"
+  local src="$(dirname "${BASH_SOURCE[0]}")/.aliasarr"
+  local dst="${STACK_DIR}/.aliasarr"
+  run_cmd cp "$src" "$dst"
+  local shellrc="/home/${USER_NAME}/.zshrc"
+  local line="[ -f \"$dst\" ] && source \"$dst\""
+  if ! grep -Fq "$line" "$shellrc" 2>/dev/null; then
+    if is_dry; then
+      note "[DRY] append ARR vars and source to $shellrc"
+    else
+      {
+        printf '%s\n' "export ARR_BASE=\"$BASE\""
+        printf '%s\n' "export ARR_STACK_DIR=\"$STACK_DIR\""
+        printf '%s\n' "export ARR_DOCKER_DIR=\"$DOCKER_DIR\""
+        printf '%s\n' "$line"
+      } >> "$shellrc"
+    fi
+    ok "ARR aliases added to $shellrc"
+  else
+    ok "ARR aliases already present in $shellrc"
+  fi
 }
 
 # --------------------------------[ MAIN ]--------------------------------------
@@ -713,7 +704,7 @@ main() {
   write_compose
   pull_images
   start_with_checks
-  install_pvpn_helper
+  install_aliases
   echo
   ok "Done. Next steps:"
   echo "  • Edit ${PROTON_CREDS_FILE} (username WITHOUT +pmp) if you haven't already."

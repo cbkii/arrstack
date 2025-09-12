@@ -1,5 +1,5 @@
-# ~/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
-# Source from your shell:  [ -f "$HOME/srv/.aliasarr" ] && source "$HOME/srv/.aliasarr"
+# arr-stack/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
+# Source from your shell:  [ -f "$HOME/srv/arr-stack/.aliasarr" ] && source "$HOME/srv/arr-stack/.aliasarr"
 # Assumes the merged installer’s defaults; override via env before sourcing:
 #   export ARR_BASE="$HOME/srv"
 #   export ARR_STACK_DIR="$ARR_BASE/arr-stack"
@@ -232,4 +232,4 @@ alias pvpnconnect='pvpn connect'
 alias pvpnreconnect='pvpn reconnect'
 alias pvpnmode='pvpn mode'
 
-# End of ~/.aliasarr
+# End of arr-stack/.aliasarr
