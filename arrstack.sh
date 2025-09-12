@@ -8,7 +8,7 @@ set -euo pipefail
 USER_NAME="${USER:-$(id -un)}"
 BASE="/home/${USER_NAME}/srv"
 DOCKER_DIR="${BASE}/docker"
-STACK_DIR="${BASE}/arr-stack"
+STACK_DIR="${BASE}/arrstack"
 BACKUP_DIR="${BASE}/backups"
 PVPN_SRC="${BASE}/pvpn-backup" # Put Proton files (.conf, etc.) here
 

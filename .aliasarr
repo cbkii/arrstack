@@ -1,13 +1,13 @@
-# arr-stack/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
-# Source from your shell:  [ -f "$HOME/srv/arr-stack/.aliasarr" ] && source "$HOME/srv/arr-stack/.aliasarr"
+# arrstack/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
+# Source from your shell:  [ -f "$HOME/srv/arrstack/.aliasarr" ] && source "$HOME/srv/arrstack/.aliasarr"
 # Assumes the merged installer’s defaults; override via env before sourcing:
 #   export ARR_BASE="$HOME/srv"
-#   export ARR_STACK_DIR="$ARR_BASE/arr-stack"
+#   export ARR_STACK_DIR="$ARR_BASE/arrstack"
 #   export ARR_DOCKER_DIR="$ARR_BASE/docker"
 
 # ----------------[ Core paths ]----------------
 ARR_BASE="${ARR_BASE:-$HOME/srv}"
-ARR_STACK_DIR="${ARR_STACK_DIR:-$ARR_BASE/arr-stack}"
+ARR_STACK_DIR="${ARR_STACK_DIR:-$ARR_BASE/arrstack}"
 ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-$ARR_BASE/docker}"
 ARR_ENV_FILE="${ARR_ENV_FILE:-$ARR_STACK_DIR/.env}"
 ARR_DC="docker compose --env-file \"$ARR_ENV_FILE\" -f \"$ARR_STACK_DIR/docker-compose.yml\""
@@ -232,4 +232,4 @@ alias pvpnconnect='pvpn connect'
 alias pvpnreconnect='pvpn reconnect'
 alias pvpnmode='pvpn mode'
 
-# End of arr-stack/.aliasarr
+# End of arrstack/.aliasarr

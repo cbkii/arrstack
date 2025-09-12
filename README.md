@@ -64,7 +64,7 @@ sudo systemctl enable --now docker
 ## Default folders & mapping
 
 * Base: `~/srv`
-* Compose & `.env`: `~/srv/arr-stack`
+* Compose & `.env`: `~/srv/arrstack`
 * App data: `~/srv/docker/<service>`
 * Downloads: `~/downloads` → mounted in qB as `/downloads`
 * Completed: `~/downloads/completed` → `/completed`
@@ -79,11 +79,11 @@ In each Arr app, add the **qBittorrent** client and make sure paths match these 
 
 ## Daily use
 
-The installer drops helper aliases at `~/srv/arr-stack/.aliasarr` and sources them from `~/.zshrc`:
+The installer drops helper aliases at `~/srv/arrstack/.aliasarr` and sources them from `~/.zshrc`:
 
 ```bash
 # already added to ~/.zshrc
-[ -f ~/srv/arr-stack/.aliasarr ] && source ~/srv/arr-stack/.aliasarr
+[ -f ~/srv/arrstack/.aliasarr ] && source ~/srv/arrstack/.aliasarr
 pvpn status   # show mode, public IP, forwarded port
 ```
 
@@ -128,7 +128,7 @@ The installer is safe to re-run; it will pull new images and start cleanly:
 Or:
 
 ```bash
-cd ~/srv/arr-stack
+cd ~/srv/arrstack
 docker compose pull
 docker compose up -d
 ```
@@ -158,10 +158,10 @@ docker compose up -d
 * **Forwarded port (OpenVPN):** `curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded`
 * **Force qB to current PF:** `pvpn portsync`
 
-If you change default folders/ports in the script, update the mounts/ports in `~/srv/arr-stack/docker-compose.yml` accordingly and run:
+If you change default folders/ports in the script, update the mounts/ports in `~/srv/arrstack/docker-compose.yml` accordingly and run:
 
 ```bash
-cd ~/srv/arr-stack
+cd ~/srv/arrstack
 docker compose up -d
 ```
 
@@ -172,7 +172,7 @@ docker compose up -d
 Stop the stack:
 
 ```bash
-cd ~/srv/arr-stack
+cd ~/srv/arrstack
 docker compose down
 ```
 
