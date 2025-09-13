@@ -1,14 +1,17 @@
 # arrstack/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
-# Source from your shell:  [ -f "$HOME/srv/arrstack/.aliasarr" ] && source "$HOME/srv/arrstack/.aliasarr"
+# Source from your shell:  [ -f "$ARR_STACK_DIR/.aliasarr" ] && source "$ARR_STACK_DIR/.aliasarr"
 # Assumes the merged installer’s defaults; override via env before sourcing:
-#   export ARR_BASE="$HOME/srv"
-#   export ARR_STACK_DIR="$ARR_BASE/arrstack"
-#   export ARR_DOCKER_DIR="$ARR_BASE/docker"
+#   export ARR_BASE="${BASE:-$HOME/srv}"
+#   export ARR_STACK_DIR="${STACK_DIR:-$ARR_BASE/arrstack}"
+#   export ARR_DOCKER_DIR="${DOCKER_DIR:-$ARR_BASE/docker}"
+#   export ARR_BACKUP_DIR="${BACKUP_DIR:-$ARR_BASE/backups}"
+#   export ARR_ENV_FILE="$ARR_STACK_DIR/.env"
 
 # ----------------[ Core paths ]----------------
-ARR_BASE="${ARR_BASE:-$HOME/srv}"
-ARR_STACK_DIR="${ARR_STACK_DIR:-$ARR_BASE/arrstack}"
-ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-$ARR_BASE/docker}"
+ARR_BASE="${ARR_BASE:-${BASE:-$HOME/srv}}"
+ARR_STACK_DIR="${ARR_STACK_DIR:-${STACK_DIR:-$ARR_BASE/arrstack}}"
+ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-${DOCKER_DIR:-$ARR_BASE/docker}}"
+ARR_BACKUP_DIR="${ARR_BACKUP_DIR:-${BACKUP_DIR:-$ARR_BASE/backups}}"
 ARR_ENV_FILE="${ARR_ENV_FILE:-$ARR_STACK_DIR/.env}"
 ARR_DC="docker compose --env-file \"$ARR_ENV_FILE\" -f \"$ARR_STACK_DIR/docker-compose.yml\""
 
@@ -36,11 +39,11 @@ arr.stats()    { docker stats --no-stream $(printf "%s " "${ARR_SERVICES[@]}") 2
 arr.shell()    { local s="${1:?service}"; docker exec -it "$s" /bin/bash 2>/dev/null || docker exec -it "$s" /bin/sh; }
 arr.health()   { for s in "${ARR_SERVICES[@]}"; do printf "%-14s : %s\n" "$s" "$(docker inspect --format '{{.State.Health.Status}}' "$s" 2>/dev/null || echo n/a)"; done; }
 arr.backup()   {
-  local ts dir out base="$ARR_DOCKER_DIR" dst="$ARR_BASE/backups/cli-$(_arr_now)";
+  local src="$ARR_DOCKER_DIR" dst="$ARR_BACKUP_DIR/cli-$(_arr_now)"
   mkdir -p "$dst"
   for s in "${ARR_SERVICES[@]}"; do
-    dir="$base/$s"; out="$dst/${s}-config.tgz"
-    [[ -d "$dir" ]] && tar -C "$base" -czf "$out" "$s" && echo "saved -> $out"
+    local dir="$src/$s" out="$dst/${s}-config.tgz"
+    [[ -d "$dir" ]] && tar -C "$src" -czf "$out" "$s" && echo "saved -> $out"
   done
   echo "Backups in $dst"
 }
@@ -70,7 +73,7 @@ arr.open()     {
 pvpn() {
   local cmd="${1:-}"; shift || true
   local BASE="$ARR_BASE"; local STACK_DIR="$ARR_STACK_DIR"; local ENV_FILE="$ARR_ENV_FILE"
-  local CREDS_FILE="$ARR_DOCKER_DIR/gluetun/proton-credentials.conf"
+  local CREDS_FILE="${PROTON_CREDS_FILE:-$ARR_DOCKER_DIR/gluetun/proton-credentials.conf}"
   _get(){ _arr_get "$1"; }
   _set(){ local k="$1" v="$2"; sed -i "/^${k}=/d" "$ENV_FILE" 2>/dev/null; [[ -n "$v" ]] && echo "${k}=${v}" >>"$ENV_FILE"; }
   _restart(){ ( cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" restart gluetun ); }

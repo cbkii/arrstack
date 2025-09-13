@@ -660,6 +660,8 @@ install_aliases() {
         printf '%s\n' "export ARR_BASE=\"$BASE\""
         printf '%s\n' "export ARR_STACK_DIR=\"$STACK_DIR\""
         printf '%s\n' "export ARR_DOCKER_DIR=\"$DOCKER_DIR\""
+        printf '%s\n' "export ARR_BACKUP_DIR=\"$BACKUP_DIR\""
+        printf '%s\n' "export ARR_ENV_FILE=\"$STACK_DIR/.env\""
         printf '%s\n' "$line"
       } >> "$shellrc"
     fi
