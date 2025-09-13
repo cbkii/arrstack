@@ -12,6 +12,9 @@ ARR_STACK_DIR="${ARR_BASE}/arr-stack"
 ARR_BACKUP_DIR="${ARR_BASE}/backups"
 ARR_PVPN_SRC="${ARR_BASE}/pvpn-backup" # Put Proton files (.conf, etc.) here
 
+# Local IP for binding services
+LAN_IP="192.168.1.50" # set to your host's LAN IP
+
 # Media/Downloads layout
 MEDIA_DIR="/media/mediasmb"
 DOWNLOADS_DIR="/home/${USER_NAME}/downloads"
@@ -54,7 +57,7 @@ NO_COLOR="${NO_COLOR:-0}"
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_PVPN_SRC
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
-export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS PUID PGID TZ_AU
+export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP PUID PGID TZ_AU
 export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK GLUETUN_API_KEY
 
 # ----------------------------[ LOGGING ]---------------------------------------
@@ -110,9 +113,9 @@ atomic_write() {
 
 # ----------------------------[ PRECHECKS ]-------------------------------------
 check_deps() {
-  step "0A/13 Checking prerequisites"
+  step "0A/12 Checking prerequisites"
   [[ "$(whoami)" == "${USER_NAME}" ]] || die "Run as '${USER_NAME}' (current: $(whoami))"
-  for b in docker curl jq openssl; do command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"; done
+  for b in docker wget curl openssl; do command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"; done
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
   if ! command -v ss >/dev/null 2>&1; then
     note "Installing iproute2 for net utils"
@@ -128,7 +131,7 @@ compose_cmd() { (
   run_cmd docker compose "$@"
 ); }
 stop_stack_if_present() {
-  step "0B/13 Stopping any existing stack"
+  step "0B/12 Stopping any existing stack"
   compose_cmd down >/dev/null 2>&1 || true
 }
 stop_named_containers() {
@@ -176,14 +179,14 @@ clean_targeted_volumes() {
 
 # -------------------------[ DIRECTORIES & BACKUP ]-----------------------------
 create_dirs() {
-  step "1/13 Creating folders"
+  step "1/12 Creating folders"
   ensure_dir "${ARR_STACK_DIR}"
   ensure_dir "${ARR_BACKUP_DIR}"
-  for d in gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr scripts; do ensure_dir "${ARR_DOCKER_DIR}/${d}"; done
+  for d in gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr; do ensure_dir "${ARR_DOCKER_DIR}/${d}"; done
   for d in "${MEDIA_DIR}" "${DOWNLOADS_DIR}" "${COMPLETED_DIR}" "${MEDIA_DIR}" "${MOVIES_DIR}" "${TV_DIR}" "${SUBS_DIR}"; do ensure_dir "$d"; done
 }
 backup_configs() {
-  step "2/13 Backing up ALL existing configurations"
+  step "2/12 Backing up ALL existing configurations"
   local TS
   TS="$(date +%Y%m%d-%H%M%S)"
   BACKUP_SUBDIR="${ARR_BACKUP_DIR}/backup-${TS}"
@@ -215,7 +218,7 @@ backup_configs() {
   export NATIVE_DIRS
 }
 move_native_dirs() {
-  step "3/13 Moving native application directories"
+  step "3/12 Moving native application directories"
   local NATIVE_MOVE_DIR="${BACKUP_SUBDIR}/native-configs"
   ensure_dir "${NATIVE_MOVE_DIR}"
   for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then
@@ -224,7 +227,7 @@ move_native_dirs() {
   fi; done
 }
 purge_native_packages() {
-  step "4/13 Purging ALL native packages"
+  step "4/12 Purging ALL native packages"
   run_cmd sudo apt-get update -y >/dev/null 2>&1 || true
   for PKG in ${ALL_PACKAGES}; do if dpkg -l | grep -q "^ii.*${PKG}"; then
     note "Purging ${PKG}…"
@@ -234,14 +237,14 @@ purge_native_packages() {
   ok "Native packages purged"
 }
 final_docker_cleanup() {
-  step "5/13 Final Docker cleanup pass"
+  step "5/12 Final Docker cleanup pass"
   for CONTAINER in ${ALL_CONTAINERS}; do if docker ps -aq --filter "name=${CONTAINER}" | grep -q .; then run_cmd docker rm -f $(docker ps -aq --filter "name=${CONTAINER}") >/dev/null 2>&1 || true; else note "No leftover ${CONTAINER}"; fi; done
   ok "Docker containers cleaned"
 }
 
 # ---------------------------[ PROTON CREDS ]----------------------------------
 ensure_creds_template() {
-  step "6/13 Ensuring Proton credential file"
+  step "6/12 Ensuring Proton credential file"
   ensure_dir "${ARR_DOCKER_DIR}/gluetun"
   if [[ ! -f "${PROTON_CREDS_FILE}" ]]; then
     if [[ -f "${PROTON_CREDS_FBAK}" ]]; then
@@ -288,48 +291,23 @@ parse_wg_conf() {
 
 # ------------------------------[ GLUETUN AUTH ]--------------------------------
 make_gluetun_apikey() {
-  step "7/13 Generating Gluetun API key"
+  step "7/12 Generating Gluetun API key"
   if docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey 2>/dev/null; then GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"; else GLUETUN_API_KEY="$(openssl rand -base64 48)"; fi
   rm -f /tmp/gl_apikey
   ok "API key generated"
 }
 write_gluetun_auth() {
-  step "8/13 Writing Gluetun RBAC config"
+  step "8/12 Writing Gluetun RBAC config"
   local AUTH_DIR="${ARR_DOCKER_DIR}/gluetun/auth"
   ensure_dir "$AUTH_DIR"
-  local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="public"\nauth="none"\nroutes=["GET /v1/publicip/ip"]\n\n[[roles]]\nname="port-monitor"\nauth="apikey"\napikey="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/publicip/ip","GET /v1/openvpn/portforwarded","GET /v1/openvpn/status","GET /v1/wireguard/portforwarded","GET /v1/wireguard/status"]\n'
+  local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="readonly"\nauth="basic"\nusername="gluetun"\npassword="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/openvpn/status","GET /v1/wireguard/status","GET /v1/publicip/ip","GET /v1/openvpn/portforwarded"]\n'
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
 }
 
 # ---------------------------[ PORT MONITOR ]-----------------------------------
-create_pf_monitor() {
-  step "9/13 Creating PF monitor script"
-  local F="${ARR_DOCKER_DIR}/scripts/port-monitor.sh"
-  ensure_dir "${ARR_DOCKER_DIR}/scripts"
-  cat >"$F" <<'SCRIPT'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-QBT_HOST="localhost"; QBT_PORT="8080"; QBT_USER="${QBT_USER:-admin}"; QBT_PASS="${QBT_PASS:-adminadmin}"
-GLUETUN_API="http://localhost:8000"; LOG_FILE="/config/port-monitor.log"; CHECK_INTERVAL=45; STAMP="/config/pf.port"
-log(){ echo "[$(date +%F' '%T)] $*" | tee -a "$LOG_FILE"; }
-get_pf(){
-  local p=""
-  p=$(curl -fsS "$GLUETUN_API/v1/openvpn/portforwarded" | jq -r '.port//empty' 2>/dev/null || true)
-  [[ -n "$p" ]] || p=$(curl -fsS "$GLUETUN_API/v1/wireguard/portforwarded" | jq -r '.port//empty' 2>/dev/null || true)
-  echo "$p" | grep -E '^[0-9]+$' | awk '$1>1024 && $1<65536{print$1}'
-}
-get_qbt(){ curl -fsS "http://${QBT_HOST}:${QBT_PORT}/api/v2/app/preferences" --data "username=${QBT_USER}&password=${QBT_PASS}"|jq -r '.listen_port//empty'||true; }
-set_qbt(){ local np="$1"; curl -fsS "http://${QBT_HOST}:${QBT_PORT}/api/v2/app/setPreferences" --data "username=${QBT_USER}&password=${QBT_PASS}" --data-urlencode "json={\"listen_port\":${np},\"upnp\":false}" >/dev/null 2>&1; }
-main(){ log "PF monitor started"; while :; do pf="$(get_pf||true)"; if [ -n "$pf" ]; then cur="$(get_qbt||true)"; if [ "$cur" != "$pf" ]; then log "Updating qB listen port ${cur:-N/A} -> $pf"; set_qbt "$pf" && echo "$pf" >"$STAMP"; else [ -f "$STAMP" ] || echo "$pf" >"$STAMP"; log "qB listen port already $pf"; fi; else log "No forwarded port yet"; rm -f "$STAMP"; fi; sleep "$CHECK_INTERVAL"; done }
-main "$@"
-SCRIPT
-  run_cmd chmod +x "$F"
-  ok "Wrote $F"
-}
-
 # ------------------------------[ .ENV FILE ]-----------------------------------
 write_env() {
-  step "10/13 Writing stack .env"
+  step "9/12 Writing stack .env"
   local envf="${ARR_STACK_DIR}/.env"
   ensure_dir "${ARR_STACK_DIR}"
   local PU="" PP="" WG="" VM="${DEFAULT_VPN_MODE}" CN="${SERVER_COUNTRIES}"
@@ -355,6 +333,7 @@ GLUETUN_API_KEY=${GLUETUN_API_KEY}
 QBT_HTTP_PORT_HOST=${QBT_HTTP_PORT_HOST}
 QBT_USER=${QBT_USER}
 QBT_PASS=${QBT_PASS}
+LAN_IP=${LAN_IP}
 
 # Paths
 ARR_BASE=${ARR_BASE}
@@ -377,6 +356,9 @@ OPENVPN_USER=${OPENVPN_USER}
 
 # WireGuard fallback
 WIREGUARD_PRIVATE_KEY=${WG}
+WIREGUARD_ADDRESSES=
+VPN_DNS_ADDRESS=
+WIREGUARD_MTU=1320
 EOF
   run_cmd chmod 600 "${envf}"
   ok "Wrote ${envf}"
@@ -384,7 +366,7 @@ EOF
 
 # ---------------------------[ COMPOSE FILE ]-----------------------------------
 write_compose() {
-  step "11/13 Writing docker-compose.yml"
+  step "10/12 Writing docker-compose.yml"
   cat >"${ARR_STACK_DIR}/docker-compose.yml" <<'YAML'
 services:
   gluetun:
@@ -400,7 +382,9 @@ services:
       - OPENVPN_USER=${OPENVPN_USER}
       - OPENVPN_PASSWORD=${PROTON_PASS}
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
-      - WIREGUARD_MTU=1320
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - WIREGUARD_MTU=${WIREGUARD_MTU}
+      - VPN_DNS_ADDRESS=${VPN_DNS_ADDRESS}
       - VPN_PORT_FORWARDING=on
       - VPN_PORT_FORWARDING_PROVIDER=protonvpn
       - PORT_FORWARD_ONLY=on
@@ -412,25 +396,25 @@ services:
       - UPDATER_PERIOD=
       - HEALTH_TARGET_ADDRESS=1.1.1.1:443
       # Control server (RBAC)
-      - HTTP_CONTROL_SERVER_ADDRESS=0.0.0.0:8000
+      - HTTP_CONTROL_SERVER_ADDRESS=${LAN_IP}:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
+      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" http://localhost:8080/api/v2/app/setPreferences'
     volumes:
       - ${ARR_DOCKER_DIR}/gluetun:/gluetun
       - ${ARR_DOCKER_DIR}/gluetun/auth/config.toml:/gluetun/auth/config.toml:ro
     ports:
-      - "127.0.0.1:8000:8000"          # Gluetun control API (host-local)
-      - "${QBT_HTTP_PORT_HOST}:8080"   # qB WebUI via gluetun namespace
-      - "8989:8989"                    # Sonarr
-      - "7878:7878"                    # Radarr
-      - "9696:9696"                    # Prowlarr
-      - "6767:6767"                    # Bazarr
-      - "8191:8191"                    # FlareSolverr
+      - "${LAN_IP}:8000:8000"          # Gluetun control API
+      - "${LAN_IP}:${QBT_HTTP_PORT_HOST}:8080"   # qB WebUI via gluetun namespace
+      - "${LAN_IP}:8989:8989"                    # Sonarr
+      - "${LAN_IP}:7878:7878"                    # Radarr
+      - "${LAN_IP}:9696:9696"                    # Prowlarr
+      - "${LAN_IP}:6767:6767"                    # Bazarr
+      - "${LAN_IP}:8191:8191"                    # FlareSolverr
     healthcheck:
       test: |
-        curl -fsS http://localhost:8000/v1/publicip/ip &&
-        curl -fsS http://localhost:8000/v1/openvpn/status &&
-        curl -fsS http://localhost:8000/v1/openvpn/portforwarded | jq -e '.port | tonumber > 1024'
+        wget -qO- http://localhost:8000/v1/publicip/ip >/dev/null &&
+        wget -qO- "http://localhost:8000/v1/${VPN_TYPE}/status" | grep -q '"status":"running"'
       interval: 30s
       timeout: 15s
       retries: 5
@@ -452,21 +436,15 @@ services:
       - ${ARR_DOCKER_DIR}/qbittorrent:/config
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
-      - ${ARR_DOCKER_DIR}/scripts:/scripts:ro
     depends_on:
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/v2/app/version >/dev/null && ( [ \"$VPN_TYPE\" != 'openvpn' ] || [ -f /config/pf.port ] )"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/v2/app/version >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
-    command: |
-      /bin/bash -c '
-        if [ "$VPN_TYPE" = "openvpn" ]; then /scripts/port-monitor.sh & fi
-        exec /init
-      '
     restart: unless-stopped
 
   sonarr:
@@ -488,7 +466,7 @@ services:
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8989 >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8989 >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -514,7 +492,7 @@ services:
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:7878 >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7878 >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -535,7 +513,7 @@ services:
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9696 >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9696 >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -561,7 +539,7 @@ services:
       radarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:6767 >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6767 >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -578,7 +556,7 @@ services:
       prowlarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8191 >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8191 >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -606,12 +584,14 @@ validate_creds_or_die() {
   fi
 }
 pull_images() {
-  step "12/13 Pulling images"
+  step "11/12 Pulling images"
   compose_cmd pull || warn "Pull failed; will rely on up"
 }
 start_with_checks() {
-  step "13/13 Starting the stack with enhanced health monitoring"
+  step "12/12 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
+  local VM
+  VM="$(grep -E '^VPN_MODE=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
   local MAX_RETRIES=5 RETRY=0
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
@@ -620,8 +600,12 @@ start_with_checks() {
     while [[ $waited -lt 180 ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
       IP="$(docker exec gluetun wget -qO- http://localhost:8000/v1/publicip/ip 2>/dev/null || true)"
-      PF="$(docker exec gluetun wget -qO- http://localhost:8000/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"
-      [[ "$HEALTH" = healthy && -n "$IP" && -n "$PF" && "$PF" -gt 1024 ]] && break
+      if [[ "$VM" = openvpn ]]; then
+        PF="$(docker exec gluetun wget -qO- http://localhost:8000/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"
+        [[ "$HEALTH" = healthy && -n "$IP" && -n "$PF" && "$PF" -gt 1024 ]] && break
+      else
+        [[ "$HEALTH" = healthy && -n "$IP" ]] && break
+      fi
       sleep 5
       waited=$((waited + 5))
     done
@@ -641,9 +625,11 @@ start_with_checks() {
   compose_cmd up -d qbittorrent prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
   compose_cmd ps || true
   note "Public IP:"
-  curl -fsS http://127.0.0.1:8000/v1/publicip/ip || true
-  note "Forwarded port:"
-  curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || true
+  wget -qO- http://${LAN_IP}:8000/v1/publicip/ip || true
+  if [[ "$VM" = openvpn ]]; then
+    note "Forwarded port:"
+    wget -qO- http://${LAN_IP}:8000/v1/openvpn/portforwarded || true
+  fi
 }
 
 
@@ -664,6 +650,7 @@ install_aliases() {
         printf '%s\n' "export ARR_DOCKER_DIR=\"$ARR_DOCKER_DIR\""
         printf '%s\n' "export ARR_BACKUP_DIR=\"$ARR_BACKUP_DIR\""
         printf '%s\n' "export ARR_ENV_FILE=\"$ARR_STACK_DIR/.env\""
+        printf '%s\n' "export LAN_IP=\"$LAN_IP\""
         printf '%s\n' "$line"
       } >> "$shellrc"
     fi
@@ -691,16 +678,15 @@ main() {
   ensure_creds_template
   make_gluetun_apikey
   write_gluetun_auth
-  create_pf_monitor
   write_env
   # Optional: auto-seed WG key from a .conf if none set
   if ! grep -q '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" || [[ -z "$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2-)" ]]; then
     if CONF="$(find_wg_conf || true)"; then
       if read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null); then
-        sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
+        sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
         echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
         [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${ARR_STACK_DIR}/.env"
-        [ -n "$D" ] && echo "DNS_ADDRESS=${D}" >>"${ARR_STACK_DIR}/.env"
+        [ -n "$D" ] && echo "VPN_DNS_ADDRESS=${D}" >>"${ARR_STACK_DIR}/.env"
         ok "Seeded WG from $(basename "$CONF")"
       fi
     fi
