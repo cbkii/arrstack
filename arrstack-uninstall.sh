@@ -26,7 +26,7 @@ CRITICAL_PORTS="8080 8989 7878 9696 6767 8191 8000"
 # ----- logging helpers -------------------------------------------------------
 step() { printf '\n\033[1;36m== %s ==\033[0m\n' "$1"; }
 note() { printf '\033[0;36m- %s\033[0m\n' "$1"; }
-ok()   { printf '\033[0;32m✔ %s\033[0m\n' "$1"; }
+ok() { printf '\033[0;32m✔ %s\033[0m\n' "$1"; }
 warn() { printf '\033[0;33m⚠ %s\033[0m\n' "$1"; }
 
 SUDO=""
@@ -34,7 +34,10 @@ SUDO=""
 
 confirm() {
   read -r -p "This will REMOVE Arr stack containers, configs and packages. Continue? (y/N) " ans
-  [[ $ans =~ ^[Yy]$ ]] || { note "Aborted"; exit 0; }
+  [[ $ans =~ ^[Yy]$ ]] || {
+    note "Aborted"
+    exit 0
+  }
 }
 
 ensure_dirs() { mkdir -p "${BACKUP_SUBDIR}/systemd"; }
@@ -91,12 +94,12 @@ backup_all() {
   done < <(
     find "${HOME}" /etc /var/lib /opt -type f \
       \( -iname 'qBittorrent.conf' -o -iname 'qBittorrent.ini' -o \
-         -iname 'settings.json' -o -iname 'config.json' -o \
-         -iname 'config.xml' -o -iname 'nzbdrone.db' -o \
-         -iname 'sonarr.db' -o -iname 'radarr.db' -o \
-         -iname 'prowlarr.db' -o -iname 'bazarr.db' -o \
-         -iname 'jackett.db' -o -iname 'lidarr.db' -o \
-         -iname 'readarr.db' \) 2>/dev/null
+      -iname 'settings.json' -o -iname 'config.json' -o \
+      -iname 'config.xml' -o -iname 'nzbdrone.db' -o \
+      -iname 'sonarr.db' -o -iname 'radarr.db' -o \
+      -iname 'prowlarr.db' -o -iname 'bazarr.db' -o \
+      -iname 'jackett.db' -o -iname 'lidarr.db' -o \
+      -iname 'readarr.db' \) 2>/dev/null
   )
   ok "Backups saved to ${BACKUP_SUBDIR}"
 }
@@ -105,7 +108,7 @@ stop_stack() {
   step "Stopping Docker stack"
   for d in "${ARR_STACK_DIRS[@]}"; do
     if [[ -d "$d" ]]; then
-      ( cd "$d" && docker compose down -v --remove-orphans >/dev/null 2>&1 ) || true
+      (cd "$d" && docker compose down -v --remove-orphans >/dev/null 2>&1) || true
     fi
   done
   for c in ${ALL_CONTAINERS}; do
@@ -169,12 +172,12 @@ remove_files() {
   done < <(
     find "${HOME}" /etc /var/lib /opt -type f \
       \( -iname 'qBittorrent.conf' -o -iname 'qBittorrent.ini' -o \
-         -iname 'settings.json' -o -iname 'config.json' -o \
-         -iname 'config.xml' -o -iname 'nzbdrone.db' -o \
-         -iname 'sonarr.db' -o -iname 'radarr.db' -o \
-         -iname 'prowlarr.db' -o -iname 'bazarr.db' -o \
-         -iname 'jackett.db' -o -iname 'lidarr.db' -o \
-         -iname 'readarr.db' \) 2>/dev/null
+      -iname 'settings.json' -o -iname 'config.json' -o \
+      -iname 'config.xml' -o -iname 'nzbdrone.db' -o \
+      -iname 'sonarr.db' -o -iname 'radarr.db' -o \
+      -iname 'prowlarr.db' -o -iname 'bazarr.db' -o \
+      -iname 'jackett.db' -o -iname 'lidarr.db' -o \
+      -iname 'readarr.db' \) 2>/dev/null
   )
   ok "File cleanup complete"
 }

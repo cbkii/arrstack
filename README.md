@@ -1,6 +1,7 @@
 # arrstack
 
-**arrstack** bundles ProtonVPN, Gluetun, qBittorrent and the *arr suite into a tidy, beginner‑friendly stack. It runs every service behind ProtonVPN with automatic port forwarding and provides helpful aliases for daily use.
+**arrstack** bundles ProtonVPN, Gluetun, qBittorrent and the *arr suite into a tidy, beginner‑friendly stack.
+It runs every service behind ProtonVPN with automatic port forwarding and provides helpful aliases for daily use.
 
 By default the stack connects with **OpenVPN** for reliable port forwarding; **WireGuard** can be enabled as an optional fallback.
 
@@ -54,13 +55,17 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    nano arrstack.sh             # edit configuration
    nano arrstack-uninstall.sh   # optional reset script
    ```
+
+    * Pre-seed proton auth (username on line 1, password on line 2, `chmod 600`) at `~/srv/wg-configs/proton-credentials.conf` to restore automatically.
+    * The emergency fallbackn to wireguard will also look for a server `.conf` in `~/srv/wg-configs/wg*.conf`
+
 3. **Run it** as your normal user:
 
    ```bash
    ./arrstack.sh
    ```
 
-     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if `~/srv/docker/gluetun/proton-credentials.conf` is missing. Pre-seed this file (username on line 1, password on line 2, `chmod 600`) or keep a copy at `~/srv/wg-configs/proton-credentials.conf` to restore automatically.
+     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if `~/srv/docker/gluetun/proton-credentials.conf` is missing. 
      * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
 
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
@@ -122,9 +127,10 @@ pvpn portsync     # force qB to use the currently forwarded port
 
 ## Optional: WireGuard fallback
 
-If you have a Proton **WireGuard** `.conf`:
+If you want to enable the fallback to wireguard, download a Proton **WireGuard** `.conf` from their site:
 
 1. Drop it in `~/srv/docker/gluetun/` or `~/srv/wg-configs/`.
+2. Rename as `wg*.conf` or `proton.conf`.
 2. Re-run the installer once (it may auto-seed the private key).
 3. Switch when you want:
 
@@ -139,7 +145,9 @@ If you have a Proton **WireGuard** `.conf`:
 
 ## Update the stack
 
-  The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file. For a **full reset**, run `arrstack-uninstall.sh` (backups to `~/srv/backups/`) and then reinstall.
+The installer is safe to re-run; it will pull new images and start cleanly.
+Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file.
+For a **full reset**, run `arrstack-uninstall.sh` (backups to `~/srv/backups/`) and then reinstall.
 
 ```bash
 ~/srv/arrstackrepo/arrstack.sh
@@ -203,6 +211,6 @@ Run the provided `arrstack-uninstall.sh` script to back up existing configuratio
 
 ## Notes
 
-* Proton credentials live at `~/srv/docker/gluetun/proton-credentials.conf` (`chmod 600`). Keep a spare copy at `~/srv/wg-configs/proton-credentials.conf` and the installer will seed from it if the main file is missing. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
+* Proton credentials live at `~/srv/docker/gluetun/proton-credentials.conf` (`chmod 600`). Keep a backup at `~/srv/wg-configs/proton-credentials.conf` and the installer will seed from it if the main file is missing. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
 * `.env` is also `chmod 600` and only contains what Compose needs.
 * You can customise paths and ports by editing the variables at the top of the script before running it.

@@ -286,8 +286,14 @@ ensure_pmp() {
 find_wg_conf() {
   local n="proton.conf" c
   [ $# -gt 0 ] && n="$1"
-  for c in "${ARR_DOCKER_DIR}/gluetun/${n}" "${ARR_DOCKER_DIR}/gluetun"/*.conf "${ARR_VPNCONFS_DIR}"/*.conf; do
-    [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }
+  for c in "${ARR_DOCKER_DIR}/gluetun/${n}" \
+   "${ARR_DOCKER_DIR}/gluetun"/wg*.conf \
+   "${ARR_VPNCONFS_DIR}"/wg*.conf \
+   "${ARR_VPNCONFS_DIR}/${n}"; do
+    [[ -e "$c" ]] && {
+      printf '%s\n' "$c"
+      return 0
+    }
   done
   return 1
 }
@@ -426,14 +432,15 @@ preseed_qbt_config() {
     if [[ ! -f "$cfg" ]]; then
       ensure_dir "$(dirname "$cfg")"
       local hash
-      hash=$(python3 - <<'PY'
+      hash=$(
+        python3 - <<'PY'
 import os,base64,hashlib
 p=os.environ['QBT_PASS'].encode()
 salt=os.urandom(16)
 dk=hashlib.pbkdf2_hmac('sha512',p,salt,100000,64)
 print('@ByteArray('+base64.b64encode(dk+salt).decode()+')')
 PY
-)
+      )
       local content="[AutoRun]\nenabled=false\nprogram=\n\n[LegalNotice]\nAccepted=true\n\n[Preferences]\nConnection\\UPnP=false\nConnection\\PortRangeMin=6881\nDownloads\\SavePath=/completed/\nDownloads\\ScanDirsV2=@Variant(\\0\\0\\0\\x1c\\0\\0\\0\\0)\nDownloads\\TempPath=/downloads/incomplete/\nDownloads\\TempPathEnabled=true\nWebUI\\Address=*\nWebUI\\ServerDomains=*\nWebUI\\Username=${QBT_USER}\nWebUI\\Password_PBKDF2=${hash}\n"
       atomic_write "$cfg" "$content"
       run_cmd chmod 600 "$cfg"
@@ -722,7 +729,6 @@ start_with_checks() {
   fi
 }
 
-
 install_aliases() {
   step "Installing ARR helper aliases"
   local src
@@ -743,7 +749,7 @@ install_aliases() {
         printf '%s\n' "export ARR_ENV_FILE=\"$ARR_STACK_DIR/.env\""
         printf '%s\n' "export LAN_IP=\"$LAN_IP\""
         printf '%s\n' "$line"
-      } >> "$shellrc"
+      } >>"$shellrc"
     fi
     ok "ARR aliases added to $shellrc"
   else
