@@ -8,9 +8,9 @@ set -euo pipefail
 USER_NAME="${USER:-$(id -un)}"
 ARR_BASE="/home/${USER_NAME}/srv"
 ARR_DOCKER_DIR="${ARR_BASE}/docker"
-ARR_STACK_DIR="${ARR_BASE}/arr-stack"
+ARR_STACK_DIR="${ARR_BASE}/arrstack"
 ARR_BACKUP_DIR="${ARR_BASE}/backups"
-ARR_PVPN_SRC="${ARR_BASE}/pvpn-backup" # Put Proton files (.conf, etc.) here
+ARR_VPNCONFS_DIR="${ARR_BASE}/wg-configs" # Put Proton files (.conf, etc.) here
 
 # Local IP for binding services
 LAN_IP="192.168.1.50" # set to your host's LAN IP
@@ -38,7 +38,7 @@ DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
 SERVER_COUNTRIES="Netherlands,Germany,Switzerland,Australia,Spain,United States"
 DEFAULT_COUNTRY="Australia"
 PROTON_CREDS_FILE="${ARR_DOCKER_DIR}/gluetun/proton-credentials.conf"
-PROTON_CREDS_FBAK="${ARR_PVPN_SRC}/proton-credentials.conf"
+PROTON_CREDS_FBAK="${ARR_VPNCONFS_DIR}/proton-credentials.conf"
 GLUETUN_API_KEY=""
 
 # Service/package lists (kept at least as broad as originals)
@@ -55,7 +55,7 @@ DEBUG="${DEBUG:-0}"
 NO_COLOR="${NO_COLOR:-0}"
 
 # Export for compose templating
-export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_PVPN_SRC
+export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_VPNCONFS_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP PUID PGID TIMEZONE
 export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK GLUETUN_API_KEY
@@ -286,7 +286,7 @@ ensure_pmp() {
 find_wg_conf() {
   local n="proton.conf" c
   [ $# -gt 0 ] && n="$1"
-  for c in "${ARR_DOCKER_DIR}/gluetun/${n}" "${ARR_DOCKER_DIR}/gluetun"/*.conf "${ARR_PVPN_SRC}"/*.conf; do
+  for c in "${ARR_DOCKER_DIR}/gluetun/${n}" "${ARR_DOCKER_DIR}/gluetun"/*.conf "${ARR_VPNCONFS_DIR}"/*.conf; do
     [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }
   done
   return 1
@@ -397,7 +397,7 @@ seed_wireguard_from_conf() {
   local VM CONF K A D
   VM="$(grep -E '^VPN_MODE=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
   if [[ "$VM" = "wireguard" ]]; then
-    CONF="$(find_wg_conf "proton.conf" 2>/dev/null)" || die "VPN_MODE=wireguard but no WireGuard .conf found in ${ARR_PVPN_SRC} or ${ARR_DOCKER_DIR}/gluetun"
+    CONF="$(find_wg_conf "proton.conf" 2>/dev/null)" || die "VPN_MODE=wireguard but no WireGuard .conf found in ${ARR_VPNCONFS_DIR} or ${ARR_DOCKER_DIR}/gluetun"
     read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null) || die "Malformed WireGuard config: $CONF"
     sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
     echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
