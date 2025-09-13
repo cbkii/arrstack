@@ -47,7 +47,7 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
    ```
 
    * It will create folder structure, backups, config files and **prompt for ProtonVPN credentials** if they’re not already set.
-   * Store your **plain** Proton username (no `+pmp`); the script handles `+pmp` automatically for OpenVPN PF.
+   * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
 
   3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
