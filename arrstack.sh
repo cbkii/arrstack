@@ -25,17 +25,17 @@ SUBS_DIR="${MEDIA_DIR}/subs"
 
 # qBittorrent UI credentials/port
 QBT_HTTP_PORT_HOST="8080"
-QBT_USER="admin"
-QBT_PASS="adminadmin"
+QBT_USER=""
+QBT_PASS=""
 
 # Identity & timezone
 PUID="$(id -u)"
 PGID="$(id -g)"
-TZ_AU="Australia/Sydney"
+TIMEZONE="Australia/Sydney"
 
 # Proton defaults and selection
 DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
-SERVER_COUNTRIES="Netherlands,Germany,Switzerland"
+SERVER_COUNTRIES="Netherlands,Germany,Switzerland,Australia,Spain,United States"
 DEFAULT_COUNTRY="Australia"
 PROTON_CREDS_FILE="${ARR_DOCKER_DIR}/gluetun/proton-credentials.conf"
 PROTON_CREDS_FBAK="${ARR_PVPN_SRC}/proton-credentials.conf"
@@ -57,7 +57,7 @@ NO_COLOR="${NO_COLOR:-0}"
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_PVPN_SRC
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
-export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP PUID PGID TZ_AU
+export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP PUID PGID TIMEZONE
 export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK GLUETUN_API_KEY
 
 # ----------------------------[ LOGGING ]---------------------------------------
@@ -292,9 +292,20 @@ parse_wg_conf() {
 # ------------------------------[ GLUETUN AUTH ]--------------------------------
 make_gluetun_apikey() {
   step "7/12 Generating Gluetun API key"
-  if docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey 2>/dev/null; then GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"; else GLUETUN_API_KEY="$(openssl rand -base64 48)"; fi
-  rm -f /tmp/gl_apikey
-  ok "API key generated"
+  if [[ -f "${ARR_STACK_DIR}/.env" ]]; then
+    GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || true)"
+  fi
+  if [[ -z "${GLUETUN_API_KEY}" ]]; then
+    if docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey 2>/dev/null; then
+      GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
+    else
+      GLUETUN_API_KEY="$(openssl rand -base64 48)"
+    fi
+    rm -f /tmp/gl_apikey
+    ok "API key generated"
+  else
+    ok "Reusing existing API key"
+  fi
 }
 write_gluetun_auth() {
   step "8/12 Writing Gluetun RBAC config"
@@ -324,7 +335,7 @@ write_env() {
 # IDs & timezone
 PUID=${PUID}
 PGID=${PGID}
-TZ=${TZ_AU}
+TIMEZONE=${TIMEZONE}
 
 # Gluetun Control-Server API key
 GLUETUN_API_KEY=${GLUETUN_API_KEY}
@@ -376,7 +387,7 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     environment:
-      - TZ=${TZ}
+      - TZ=${TIMEZONE}
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=${VPN_MODE}
       - OPENVPN_USER=${OPENVPN_USER}
@@ -386,23 +397,24 @@ services:
       - WIREGUARD_MTU=${WIREGUARD_MTU}
       - VPN_DNS_ADDRESS=${VPN_DNS_ADDRESS}
       - VPN_PORT_FORWARDING=on
-      - VPN_PORT_FORWARDING_PROVIDER=protonvpn
+      # - VPN_PORT_FORWARDING_PROVIDER=protonvpn
       - PORT_FORWARD_ONLY=on
-      - SERVER_COUNTRIES=${SERVER_COUNTRIES}
-      - FREE_ONLY=off
+      - "SERVER_COUNTRIES=${SERVER_COUNTRIES}"
+      # - FREE_ONLY=off
       # DNS & stability
       - DOT=off
-      - DOT_IPV6=off
       - UPDATER_PERIOD=
       - HEALTH_TARGET_ADDRESS=1.1.1.1:443
       # Control server (RBAC)
-      - HTTP_CONTROL_SERVER_ADDRESS=${LAN_IP}:8000
+      - HTTP_CONTROL_SERVER_ADDRESS=127.0.0.1:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
-      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" http://localhost:8080/api/v2/app/setPreferences'
+      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" http://127.0.0.1:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences'
+      - PUID=${PUID}
+      - PGID=${PGID}
     volumes:
       - ${ARR_DOCKER_DIR}/gluetun:/gluetun
-      - ${ARR_DOCKER_DIR}/gluetun/auth/config.toml:/gluetun/auth/config.toml:ro
+      - ${ARR_DOCKER_DIR}/gluetun/auth:/gluetun/auth
     ports:
       - "${LAN_IP}:8000:8000"          # Gluetun control API
       - "${LAN_IP}:${QBT_HTTP_PORT_HOST}:8080"   # qB WebUI via gluetun namespace
@@ -412,11 +424,9 @@ services:
       - "${LAN_IP}:6767:6767"                    # Bazarr
       - "${LAN_IP}:8191:8191"                    # FlareSolverr
     healthcheck:
-      test: |
-        wget -qO- http://localhost:8000/v1/publicip/ip >/dev/null &&
-        wget -qO- "http://localhost:8000/v1/${VPN_TYPE}/status" | grep -q '"status":"running"'
-      interval: 30s
-      timeout: 15s
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/v1/publicip/ip >/dev/null && wget -qO- http://localhost:8000/v1/${VPN_TYPE}/status | grep -q '\"status\":\"running\"'"]
+      interval: 45s
+      timeout: 10s
       retries: 5
       start_period: 60s
     restart: unless-stopped
@@ -426,12 +436,13 @@ services:
     container_name: qbittorrent
     network_mode: "service:gluetun"
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
       - WEBUI_PORT=8080
       - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
-      - VPN_TYPE=${VPN_MODE}
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+      - QBT_USER=${QBT_USER}
+      - QBT_PASS=${QBT_PASS}
     volumes:
       - ${ARR_DOCKER_DIR}/qbittorrent:/config
       - ${DOWNLOADS_DIR}:/downloads
@@ -440,7 +451,7 @@ services:
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/v2/app/version >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${QBT_HTTP_PORT_HOST}/api/v2/app/version >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -454,7 +465,7 @@ services:
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
-      - TZ=${TZ}
+      - TZ=${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/sonarr:/config
       - ${TV_DIR}:/tv
@@ -480,7 +491,7 @@ services:
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
-      - TZ=${TZ}
+      - TZ=${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/radarr:/config
       - ${MOVIES_DIR}:/movies
@@ -506,7 +517,7 @@ services:
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
-      - TZ=${TZ}
+      - TZ=${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/prowlarr:/config
     depends_on:
@@ -527,7 +538,7 @@ services:
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
-      - TZ=${TZ}
+      - TZ=${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/bazarr:/config
       - ${TV_DIR}:/tv
@@ -698,7 +709,7 @@ main() {
   echo
   ok "Done. Next steps:"
   echo "  • Edit ${PROTON_CREDS_FILE} (username WITHOUT +pmp) if you haven't already."
-  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (default ${QBT_USER}/${QBT_PASS})."
+  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (check 'docker logs qbittorrent' for the initial password or set QBT_USER/QBT_PASS before first run)."
 }
 
 main "$@"

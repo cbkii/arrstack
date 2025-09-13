@@ -19,14 +19,14 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 ## Prerequisites
 
 - Debian/Ubuntu-like system.
-- Docker & Compose v2, plus basic tools.
+  - Docker & Compose v2, plus basic tools.
 
-Install (if needed):
-```bash
-sudo apt update
-sudo apt install -y docker.io docker-compose-plugin curl jq openssl iproute2
-sudo systemctl enable --now docker
-````
+  Install (if needed):
+  ```bash
+  sudo apt update
+  sudo apt install -y docker.io docker-compose-plugin curl openssl iproute2
+  sudo systemctl enable --now docker
+  ```
 
 ---
 
@@ -49,17 +49,20 @@ sudo systemctl enable --now docker
    * It will create folder structure, backups, config files and **prompt for ProtonVPN credentials** if they’re not already set.
    * Store your **plain** Proton username (no `+pmp`); the script handles `+pmp` automatically for OpenVPN PF.
 
-3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
+  3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
-   * **qBittorrent:** `http://<LAN_IP>:8080` (default login `admin` / `adminadmin`)
-   * **Sonarr:** `http://<LAN_IP>:8989`
-   * **Radarr:** `http://<LAN_IP>:7878`
-   * **Prowlarr:** `http://<LAN_IP>:9696`
-   * **Bazarr:** `http://<LAN_IP>:6767`
+     * **qBittorrent:** `http://<LAN_IP>:8080` – first run prints a random password to `docker logs qbittorrent`. Set `${QBT_USER}/${QBT_PASS}` before installation if you want to preseed.
+     * **Sonarr:** `http://<LAN_IP>:8989`
+     * **Radarr:** `http://<LAN_IP>:7878`
+     * **Prowlarr:** `http://<LAN_IP>:9696`
+     * **Bazarr:** `http://<LAN_IP>:6767`
+     * **Gluetun API:** `http://<LAN_IP>:8000` (Basic auth user `gluetun`, password from `.env` `GLUETUN_API_KEY`)
 
-   > Services bind to `LAN_IP` for security. Set `LAN_IP` at the top of `arrstack.sh` to your host's IP. Use `127.0.0.1` to restrict to localhost or `0.0.0.0` for all interfaces.
+     > All UIs are exposed via the Gluetun service and bound to `LAN_IP`. Set `LAN_IP` at the top of `arrstack.sh` (e.g. `127.0.0.1` for localhost-only or another LAN address to expose to your network).
 
-> Tip: After you log in, change all default passwords in each app.
+     > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
+
+  > Tip: After you log in, change the generated passwords and disable UPnP/NAT-PMP in qBittorrent.
 
 ---
 
@@ -75,7 +78,7 @@ sudo systemctl enable --now docker
   * TV: `/media/mediasmb/library/tv` → `/tv`
   * Movies: `/media/mediasmb/library/movies` → `/movies`
 
-In each Arr app, add the **qBittorrent** client and make sure paths match these containers paths.
+  In each Arr app, add the **qBittorrent** client and make sure paths match these container paths.
 
 ---
 
@@ -121,7 +124,7 @@ If you have a Proton **WireGuard** `.conf`:
 
 ## Update the stack
 
-The installer is safe to re-run; it will pull new images and start cleanly:
+  The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file.
 
 ```bash
 ~/srv/arrstack.sh
@@ -144,7 +147,7 @@ All services bind to `LAN_IP` (`192.168.1.50` by default).
 | Service         | Port | Notes                                 |
 | --------------- | ---- | ------------------------------------- |
 | qBittorrent UI  | 8080 | bound to `LAN_IP` via Gluetun         |
-| Gluetun Control | 8000 | bound to `LAN_IP`                     |
+| Gluetun Control | 8000 | bound to `LAN_IP`; auth `gluetun`/`GLUETUN_API_KEY` |
 | BitTorrent (PF) | dynamic | Proton-assigned; no host binding |
 | Sonarr          | 8989 | bound to `LAN_IP`                     |
 | Radarr          | 7878 | bound to `LAN_IP`                     |
@@ -158,9 +161,12 @@ All services bind to `LAN_IP` (`192.168.1.50` by default).
 
 * **Check status & PF:** `pvpn status`
 * **Logs:** `docker logs -f gluetun`
-* **Public IP:** `curl -u gluetun:<pass> -fsS http://${LAN_IP}:8000/v1/publicip/ip`
-* **Forwarded port (OpenVPN):** `curl -u gluetun:<pass> -fsS http://${LAN_IP}:8000/v1/openvpn/portforwarded`
+* **Public IP:** `curl -u gluetun:<GLUETUN_API_KEY> http://${LAN_IP}:8000/v1/publicip/ip`
+* **Forwarded port (OpenVPN):** `curl -u gluetun:<GLUETUN_API_KEY> http://${LAN_IP}:8000/v1/openvpn/portforwarded`
 * **Force qB to current PF:** `pvpn portsync`
+* **MTU issues (WireGuard):** lower `WIREGUARD_MTU` in `.env` from `1320` to `1280` or `1200`.
+* **DNS issues:** DoT is disabled by default (`DOT=off` in `.env`).
+* **Re-seed Proton creds:** copy fresh files to `${PROTON_CREDS_FBAK}` and re-run the installer.
 
 To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `127.0.0.1` for localhost or `0.0.0.0` for all) and rerun:
 
@@ -187,6 +193,6 @@ You can restore any app’s tarball to its previous location if you want to go b
 
 ## Notes
 
-* Proton credentials are stored at `~/srv/docker/gluetun/proton-credentials.conf` (`chmod 600`).
+* Proton credentials are stored at `~/srv/docker/gluetun/proton-credentials.conf` (`chmod 600`). Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
 * `.env` is also `chmod 600` and only contains what Compose needs.
 * You can customise paths and ports by editing the variables at the top of the script before running it.

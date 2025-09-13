@@ -140,14 +140,16 @@ glue.health() { docker inspect --format '{{.State.Health.Status}}' gluetun 2>/de
 # ----------------[ qBittorrent helpers ]----------------
 _qbt_host()   { printf "%s" "${QBT_HOST:-$LAN_IP}"; }
 _qbt_port()   { local p="$(_arr_get QBT_HTTP_PORT_HOST)"; [[ -n "$p" ]] && printf "%s" "$p" || printf "%s" "8080"; }
-_qbt_user()   { local u="$(_arr_get QBT_USER)"; [[ -n "$u" ]] && printf "%s" "$u" || printf "%s" "admin"; }
-_qbt_pass()   { local p="$(_arr_get QBT_PASS)"; [[ -n "$p" ]] && printf "%s" "$p" || printf "%s" "adminadmin"; }
+_qbt_user()   { local u="$(_arr_get QBT_USER)"; [[ -n "$u" ]] && printf "%s" "$u"; }
+_qbt_pass()   { local p="$(_arr_get QBT_PASS)"; [[ -n "$p" ]] && printf "%s" "$p"; }
 _qbt_base()   { printf "http://%s:%s" "$(_qbt_host)" "$(_qbt_port)"; }
 _qbt_cookie() { printf "/tmp/qbt-%s.cookie" "$USER"; }
 
 _qbt_login() {
+  local u="$(_qbt_user)" p="$(_qbt_pass)"
+  [[ -z "$u" || -z "$p" ]] && { _arr_warn "set QBT_USER/QBT_PASS in $ARR_ENV_FILE"; return 1; }
   curl -s -c "$(_qbt_cookie)" -X POST "$(_qbt_base)/api/v2/auth/login" \
-       --data-urlencode "username=$(_qbt_user)" --data-urlencode "password=$(_qbt_pass)" >/dev/null
+       --data-urlencode "username=$u" --data-urlencode "password=$p" >/dev/null
 }
 _qbt_get()    { _qbt_login >/dev/null 2>&1; curl -s -b "$(_qbt_cookie)" "$(_qbt_base)$1"; }
 _qbt_post()   { _qbt_login >/dev/null 2>&1; curl -s -b "$(_qbt_cookie)" -X POST "$(_qbt_base)$1" "${@:2}"; }
