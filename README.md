@@ -1,12 +1,12 @@
 # arr-stack
-ProtonVPN (OpenVPN-first, WG fallback) + Gluetun + qBittorrent PF + *arr + FlareSolverr
 
-A tidy, beginner-friendly way to run qBittorrent, Sonarr, Radarr, Prowlarr, Bazarr and FlareSolverr **behind ProtonVPN** using **Gluetun**.  
-Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as an optional fallback.
+**arr-stack** bundles ProtonVPN, Gluetun, qBittorrent and the *arr suite into a tidy, beginner‑friendly stack. It runs every service behind ProtonVPN with automatic port forwarding and provides helpful aliases for daily use.
+
+By default the stack connects with **OpenVPN** for reliable port forwarding; **WireGuard** can be enabled as an optional fallback.
 
 ---
 
-## What you get
+## Features
 
 - **Gluetun** (ProtonVPN) with sensible defaults (DoT off, stable health target, PF on).
 - **qBittorrent** in Gluetun’s network namespace.
@@ -51,10 +51,9 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
    * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
 
    ```bash
-   nano arrstack.sh             # paste the installer
+   nano arrstack.sh             # edit configuration
    nano arrstack-uninstall.sh   # optional reset script
    ```
-   
 3. **Run it** as your normal user:
 
    ```bash
@@ -199,7 +198,6 @@ Run the provided `arrstack-uninstall.sh` script to back up existing configuratio
 ```bash
 ~/srv/arrstack-uninstall.sh
 ```
-
 
 ---
 
