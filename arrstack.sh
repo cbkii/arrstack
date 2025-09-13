@@ -279,8 +279,13 @@ ensure_pmp() {
 }
 
 # ---- WireGuard auto-seed from a .conf if present ----------------------------
+# find_wg_conf [name]
+#
+# Locate a WireGuard configuration file. Optionally pass a specific
+# filename (default: "proton.conf"). Returns the first existing path.
 find_wg_conf() {
-  local n="${1:-proton.conf}" c
+  local n="proton.conf" c
+  [ $# -gt 0 ] && n="$1"
   for c in "${ARR_DOCKER_DIR}/gluetun/${n}" "${ARR_DOCKER_DIR}/gluetun"/*.conf "${ARR_PVPN_SRC}"/*.conf; do
     [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }
   done
@@ -710,7 +715,7 @@ main() {
   write_env
   # Optional: auto-seed WG key from a .conf if none set
   if ! grep -q '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" || [[ -z "$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2-)" ]]; then
-    if CONF="$(find_wg_conf || true)"; then
+    if CONF="$(find_wg_conf "proton.conf" || true)"; then
       if read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null); then
         sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
         echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
