@@ -183,7 +183,7 @@ create_dirs() {
   ensure_dir "${ARR_STACK_DIR}"
   ensure_dir "${ARR_BACKUP_DIR}"
   for d in gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr; do ensure_dir "${ARR_DOCKER_DIR}/${d}"; done
-  for d in "${MEDIA_DIR}" "${DOWNLOADS_DIR}" "${COMPLETED_DIR}" "${MEDIA_DIR}" "${MOVIES_DIR}" "${TV_DIR}" "${SUBS_DIR}"; do ensure_dir "$d"; done
+  for d in "${MEDIA_DIR}" "${DOWNLOADS_DIR}" "${DOWNLOADS_DIR}/incomplete" "${COMPLETED_DIR}" "${MEDIA_DIR}" "${MOVIES_DIR}" "${TV_DIR}" "${SUBS_DIR}"; do ensure_dir "$d"; done
 }
 backup_configs() {
   step "2/12 Backing up ALL existing configurations"
@@ -324,6 +324,7 @@ write_gluetun_auth() {
   ensure_dir "$AUTH_DIR"
   local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="readonly"\nauth="basic"\nusername="gluetun"\npassword="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/openvpn/status","GET /v1/wireguard/status","GET /v1/publicip/ip","GET /v1/openvpn/portforwarded"]\n'
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
+  run_cmd chmod 600 "${AUTH_DIR}/config.toml"
 }
 
 # ---------------------------[ PORT MONITOR ]-----------------------------------
@@ -386,6 +387,61 @@ EOF
   ok "Wrote ${envf}"
 }
 
+# Warn if LAN_IP is 0.0.0.0 which exposes services on all interfaces
+warn_lan_ip() {
+  [[ "${LAN_IP}" = "0.0.0.0" ]] && warn "LAN_IP is 0.0.0.0; services will bind to all interfaces"
+}
+
+# Populate WireGuard variables from a Proton .conf and fail if malformed when VPN_MODE=wireguard
+seed_wireguard_from_conf() {
+  local VM CONF K A D
+  VM="$(grep -E '^VPN_MODE=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
+  if [[ "$VM" = "wireguard" ]]; then
+    CONF="$(find_wg_conf "proton.conf" 2>/dev/null)" || die "VPN_MODE=wireguard but no WireGuard .conf found in ${ARR_PVPN_SRC} or ${ARR_DOCKER_DIR}/gluetun"
+    read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null) || die "Malformed WireGuard config: $CONF"
+    sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
+    echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
+    [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${ARR_STACK_DIR}/.env"
+    [ -n "$D" ] && echo "VPN_DNS_ADDRESS=${D}" >>"${ARR_STACK_DIR}/.env"
+    ok "Seeded WG from $(basename "$CONF")"
+  else
+    if ! grep -q '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" || [[ -z "$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2-)" ]]; then
+      if CONF="$(find_wg_conf "proton.conf" 2>/dev/null)"; then
+        if read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null); then
+          sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
+          echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
+          [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${ARR_STACK_DIR}/.env"
+          [ -n "$D" ] && echo "VPN_DNS_ADDRESS=${D}" >>"${ARR_STACK_DIR}/.env"
+          ok "Seeded WG from $(basename "$CONF")"
+        fi
+      fi
+    fi
+  fi
+}
+
+# Pre-seed qBittorrent credentials if provided
+preseed_qbt_config() {
+  if [[ -n "$QBT_USER" && -n "$QBT_PASS" ]]; then
+    local cfg="${ARR_DOCKER_DIR}/qbittorrent/qBittorrent.conf"
+    if [[ ! -f "$cfg" ]]; then
+      ensure_dir "$(dirname "$cfg")"
+      local hash
+      hash=$(python3 - <<'PY'
+import os,base64,hashlib
+p=os.environ['QBT_PASS'].encode()
+salt=os.urandom(16)
+dk=hashlib.pbkdf2_hmac('sha512',p,salt,100000,64)
+print('@ByteArray('+base64.b64encode(dk+salt).decode()+')')
+PY
+)
+      local content="[AutoRun]\nenabled=false\nprogram=\n\n[LegalNotice]\nAccepted=true\n\n[Preferences]\nConnection\\UPnP=false\nConnection\\PortRangeMin=6881\nDownloads\\SavePath=/completed/\nDownloads\\ScanDirsV2=@Variant(\\0\\0\\0\\x1c\\0\\0\\0\\0)\nDownloads\\TempPath=/downloads/incomplete/\nDownloads\\TempPathEnabled=true\nWebUI\\Address=*\nWebUI\\ServerDomains=*\nWebUI\\Username=${QBT_USER}\nWebUI\\Password_PBKDF2=${hash}\n"
+      atomic_write "$cfg" "$content"
+      run_cmd chmod 600 "$cfg"
+      ok "Preseeded qBittorrent credentials"
+    fi
+  fi
+}
+
 # ---------------------------[ COMPOSE FILE ]-----------------------------------
 write_compose() {
   step "10/12 Writing docker-compose.yml"
@@ -420,7 +476,7 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=127.0.0.1:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
-      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}},\"upnp\":false,\"use_upnp\":false,\"use_natpmp\":false}" http://127.0.0.1:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences'
+      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}},\"use_upnp\":false,\"use_natpmp\":false}" http://127.0.0.1:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences'
       - PUID=${PUID}
       - PGID=${PGID}
     volumes:
@@ -714,18 +770,9 @@ main() {
   make_gluetun_apikey
   write_gluetun_auth
   write_env
-  # Optional: auto-seed WG key from a .conf if none set
-  if ! grep -q '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" || [[ -z "$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2-)" ]]; then
-    if CONF="$(find_wg_conf "proton.conf" || true)"; then
-      if read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null); then
-        sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
-        echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
-        [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${ARR_STACK_DIR}/.env"
-        [ -n "$D" ] && echo "VPN_DNS_ADDRESS=${D}" >>"${ARR_STACK_DIR}/.env"
-        ok "Seeded WG from $(basename "$CONF")"
-      fi
-    fi
-  fi
+  warn_lan_ip
+  seed_wireguard_from_conf
+  preseed_qbt_config
   write_compose
   pull_images
   start_with_checks
