@@ -15,11 +15,14 @@ ARR_BACKUP_DIR="${ARR_BACKUP_DIR:-$ARR_BASE/backups}"
 ARR_ENV_FILE="${ARR_ENV_FILE:-$ARR_STACK_DIR/.env}"
 ARR_DC="docker compose --env-file \"$ARR_ENV_FILE\" -f \"$ARR_STACK_DIR/docker-compose.yml\""
 
+# LAN IP for service bindings
+LAN_IP="${LAN_IP:-192.168.1.50}"
+
 # ----------------[ Utilities ]-----------------
 _arr_exists() { docker ps -a --format '{{.Names}}' | grep -qx "$1"; }
 _arr_dc()     { ( cd "$ARR_STACK_DIR" && eval "$ARR_DC $*" ); }
 _arr_get()    { grep -E "^$1=" "$ARR_ENV_FILE" 2>/dev/null | sed 's/^[^=]*=//' | tr -d '"' ; }
-_arr_url()    { printf "http://%s:%s" "${1:-127.0.0.1}" "${2:?port}"; }
+_arr_url()    { printf "http://%s:%s" "${1:-${LAN_IP}}" "${2:?port}"; }
 _arr_now()    { date +%Y%m%d-%H%M%S; }
 _arr_info()   { printf "[arr] %s\n" "$*"; }
 _arr_warn()   { printf "[arr:warn] %s\n" "$*" >&2; }
@@ -51,7 +54,7 @@ arr.open()     {
   # Best-effort open in default browser (Linux desktop); otherwise just echo URLs
   local open_cmd
   if command -v xdg-open >/dev/null; then open_cmd="xdg-open"; else open_cmd=""; fi
-  local host="127.0.0.1"
+  local host="$LAN_IP"
   local qport="$(_arr_get QBT_HTTP_PORT_HOST)"; [[ -z "$qport" ]] && qport=8080
   local urls=(
     "qBittorrent=$(_arr_url $host $qport)"
@@ -77,6 +80,7 @@ pvpn() {
   _get(){ _arr_get "$1"; }
   _set(){ local k="$1" v="$2"; sed -i "/^${k}=/d" "$env_file" 2>/dev/null; [[ -n "$v" ]] && echo "${k}=${v}" >>"$env_file"; }
   _restart(){ ( cd "$stack_dir" && docker compose --env-file "$env_file" restart gluetun ); }
+  local auth="-u gluetun:$(_get GLUETUN_API_KEY)"
 
   case "$cmd" in
     c|connect)   ( cd "$stack_dir" && docker compose --env-file "$env_file" up -d gluetun qbittorrent );;
@@ -102,17 +106,17 @@ pvpn() {
     s|status)
       echo "-- Gluetun --"
       docker ps --filter name=gluetun --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | tail -n +2
-      echo "-- Public IP --";  curl -fsS http://127.0.0.1:8000/v1/publicip/ip || echo N/A
+      echo "-- Public IP --";  curl -fsS $auth http://${LAN_IP}:8000/v1/publicip/ip || echo N/A
       if [ "$(_get VPN_MODE)" = "openvpn" ]; then
-        echo "-- Forwarded port (OVPN) --"; curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || echo N/A
+        echo "-- Forwarded port (OVPN) --"; curl -fsS $auth http://${LAN_IP}:8000/v1/openvpn/portforwarded || echo N/A
       else
-        echo "-- Forwarded port (WG) --";   curl -fsS http://127.0.0.1:8000/v1/wireguard/portforwarded || echo N/A
+        echo "-- Forwarded port (WG) --";   curl -fsS $auth http://${LAN_IP}:8000/v1/wireguard/portforwarded || echo N/A
       fi;;
     port)
       if [ "$(_get VPN_MODE)" = "openvpn" ]; then
-        curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded
+        curl -fsS $auth http://${LAN_IP}:8000/v1/openvpn/portforwarded
       else
-        curl -fsS http://127.0.0.1:8000/v1/wireguard/portforwarded
+        curl -fsS $auth http://${LAN_IP}:8000/v1/wireguard/portforwarded
       fi;;
     *) cat <<USAGE
 pvpn commands:
@@ -129,12 +133,12 @@ USAGE
 
 glue.logs()   { arr.logs gluetun; }
 glue.restart(){ docker restart gluetun; }
-glue.ip()     { curl -fsS http://127.0.0.1:8000/v1/publicip/ip; echo; }
+glue.ip()     { curl -fsS -u gluetun:$(_get GLUETUN_API_KEY) http://${LAN_IP}:8000/v1/publicip/ip; echo; }
 glue.pf()     { pvpn port; echo; }
 glue.health() { docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo n/a; }
 
 # ----------------[ qBittorrent helpers ]----------------
-_qbt_host()   { printf "%s" "${QBT_HOST:-127.0.0.1}"; }
+_qbt_host()   { printf "%s" "${QBT_HOST:-$LAN_IP}"; }
 _qbt_port()   { local p="$(_arr_get QBT_HTTP_PORT_HOST)"; [[ -n "$p" ]] && printf "%s" "$p" || printf "%s" "8080"; }
 _qbt_user()   { local u="$(_arr_get QBT_USER)"; [[ -n "$u" ]] && printf "%s" "$u" || printf "%s" "admin"; }
 _qbt_pass()   { local p="$(_arr_get QBT_PASS)"; [[ -n "$p" ]] && printf "%s" "$p" || printf "%s" "adminadmin"; }
@@ -174,10 +178,10 @@ qbt.limit()   { local down="${1:-0}" up="${2:-0}"; _qbt_post "/api/v2/transfer/s
 #   export BAZARR_API_KEY=xxxxx
 
 # ---- Common UI helpers
-sonarr.url()    { echo "$(_arr_url 127.0.0.1 8989)"; }
-radarr.url()    { echo "$(_arr_url 127.0.0.1 7878)"; }
-prowlarr.url()  { echo "$(_arr_url 127.0.0.1 9696)"; }
-bazarr.url()    { echo "$(_arr_url 127.0.0.1 6767)"; }
+sonarr.url()    { echo "$(_arr_url $LAN_IP 8989)"; }
+radarr.url()    { echo "$(_arr_url $LAN_IP 7878)"; }
+prowlarr.url()  { echo "$(_arr_url $LAN_IP 9696)"; }
+bazarr.url()    { echo "$(_arr_url $LAN_IP 6767)"; }
 
 # ---- Logs / restart
 sonarr.logs()   { arr.logs sonarr; }   ; sonarr.restart()   { docker restart sonarr; }
@@ -186,10 +190,10 @@ prowlarr.logs() { arr.logs prowlarr; } ; prowlarr.restart() { docker restart pro
 bazarr.logs()   { arr.logs bazarr; }   ; bazarr.restart()   { docker restart bazarr; }
 
 # ---- API helpers (if API keys are set)
-sonarr.api()    { curl -s -H "X-Api-Key: ${SONARR_API_KEY:?set SONARR_API_KEY}" "$(_arr_url 127.0.0.1 8989)$1" "${@:2}"; }
-radarr.api()    { curl -s -H "X-Api-Key: ${RADARR_API_KEY:?set RADARR_API_KEY}" "$(_arr_url 127.0.0.1 7878)$1" "${@:2}"; }
-prowlarr.api()  { curl -s -H "X-Api-Key: ${PROWLARR_API_KEY:?set PROWLARR_API_KEY}" "$(_arr_url 127.0.0.1 9696)$1" "${@:2}"; }
-bazarr.api()    { curl -s -H "X-Api-Key: ${BAZARR_API_KEY:?set BAZARR_API_KEY}" "$(_arr_url 127.0.0.1 6767)$1" "${@:2}"; }
+sonarr.api()    { curl -s -H "X-Api-Key: ${SONARR_API_KEY:?set SONARR_API_KEY}" "$(_arr_url $LAN_IP 8989)$1" "${@:2}"; }
+radarr.api()    { curl -s -H "X-Api-Key: ${RADARR_API_KEY:?set RADARR_API_KEY}" "$(_arr_url $LAN_IP 7878)$1" "${@:2}"; }
+prowlarr.api()  { curl -s -H "X-Api-Key: ${PROWLARR_API_KEY:?set PROWLARR_API_KEY}" "$(_arr_url $LAN_IP 9696)$1" "${@:2}"; }
+bazarr.api()    { curl -s -H "X-Api-Key: ${BAZARR_API_KEY:?set BAZARR_API_KEY}" "$(_arr_url $LAN_IP 6767)$1" "${@:2}"; }
 
 # ---- Common tasks (Sonarr/Radarr)
 sonarr.refresh() { sonarr.api "/api/v3/command" -H 'Content-Type: application/json' -d '{"name":"RefreshSeries"}'; echo "Sonarr: refresh series"; }
@@ -201,11 +205,11 @@ radarr.rss()     { radarr.api "/api/v3/command" -H 'Content-Type: application/js
 prowlarr.status(){ prowlarr.api "/api/v1/system/status" | jq; }
 
 # ---- Bazarr health
-bazarr.health()  { curl -fsS "$(_arr_url 127.0.0.1 6767)/api/system/status?apikey=${BAZARR_API_KEY:-}" || echo "Bazarr status requires API key"; echo; }
+bazarr.health()  { curl -fsS "$(_arr_url $LAN_IP 6767)/api/system/status?apikey=${BAZARR_API_KEY:-}" || echo "Bazarr status requires API key"; echo; }
 
 # ----------------[ FlareSolverr ]----------------
-flare.url()     { echo "$(_arr_url 127.0.0.1 8191)"; }
-flare.health()  { curl -fsS "$(_arr_url 127.0.0.1 8191)/health" || echo "not responding"; echo; }
+flare.url()     { echo "$(_arr_url $LAN_IP 8191)"; }
+flare.health()  { curl -fsS "$(_arr_url $LAN_IP 8191)/health" || echo "not responding"; echo; }
 flare.logs()    { arr.logs flaresolverr; }
 flare.restart() { docker restart flaresolverr; }
 

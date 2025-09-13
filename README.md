@@ -10,7 +10,7 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
 - **Gluetun** (ProtonVPN) with sensible defaults (DoT off, stable health target, PF on).
 - **qBittorrent** in Gluetun’s network namespace.
-- **Auto Port-Forward monitor** that keeps qBittorrent’s listen port in sync.
+- **Automatic qBittorrent port sync** via Gluetun’s NAT-PMP hook (no background monitor).
 - **Sonarr, Radarr, Prowlarr, Bazarr, FlareSolverr**.
 - A comprehensive **`.aliasarr`** helper with `pvpn` and stack aliases.
 
@@ -49,13 +49,15 @@ sudo systemctl enable --now docker
    * It will create folder structure, backups, config files and **prompt for ProtonVPN credentials** if they’re not already set.
    * Store your **plain** Proton username (no `+pmp`); the script handles `+pmp` automatically for OpenVPN PF.
 
-3. Open the UIs:
+3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
-   * **qBittorrent:** `http://<your-host>:8080` (default login `admin` / `adminadmin`)
-   * **Sonarr:** `http://<your-host>:8989`
-   * **Radarr:** `http://<your-host>:7878`
-   * **Prowlarr:** `http://<your-host>:9696`
-   * **Bazarr:** `http://<your-host>:6767`
+   * **qBittorrent:** `http://<LAN_IP>:8080` (default login `admin` / `adminadmin`)
+   * **Sonarr:** `http://<LAN_IP>:8989`
+   * **Radarr:** `http://<LAN_IP>:7878`
+   * **Prowlarr:** `http://<LAN_IP>:9696`
+   * **Bazarr:** `http://<LAN_IP>:6767`
+
+   > Services bind to `LAN_IP` for security. Set `LAN_IP` at the top of `arrstack.sh` to your host's IP. Use `127.0.0.1` to restrict to localhost or `0.0.0.0` for all interfaces.
 
 > Tip: After you log in, change all default passwords in each app.
 
@@ -137,16 +139,18 @@ docker compose up -d
 
 ## Ports (host)
 
+All services bind to `LAN_IP` (`192.168.1.50` by default).
+
 | Service         | Port | Notes                                 |
 | --------------- | ---- | ------------------------------------- |
-| qBittorrent UI  | 8080 | via Gluetun’s network namespace       |
-| Gluetun Control | 8000 | bound to `127.0.0.1` (localhost only) |
+| qBittorrent UI  | 8080 | bound to `LAN_IP` via Gluetun         |
+| Gluetun Control | 8000 | bound to `LAN_IP`                     |
 | BitTorrent (PF) | dynamic | Proton-assigned; no host binding |
-| Sonarr          | 8989 |                                       |
-| Radarr          | 7878 |                                       |
-| Prowlarr        | 9696 |                                       |
-| Bazarr          | 6767 |                                       |
-| FlareSolverr    | 8191 |                                       |
+| Sonarr          | 8989 | bound to `LAN_IP`                     |
+| Radarr          | 7878 | bound to `LAN_IP`                     |
+| Prowlarr        | 9696 | bound to `LAN_IP`                     |
+| Bazarr          | 6767 | bound to `LAN_IP`                     |
+| FlareSolverr    | 8191 | bound to `LAN_IP`                     |
 
 ---
 
@@ -154,11 +158,11 @@ docker compose up -d
 
 * **Check status & PF:** `pvpn status`
 * **Logs:** `docker logs -f gluetun`
-* **Public IP:** `curl -fsS http://127.0.0.1:8000/v1/publicip/ip`
-* **Forwarded port (OpenVPN):** `curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded`
+* **Public IP:** `curl -u gluetun:<pass> -fsS http://${LAN_IP}:8000/v1/publicip/ip`
+* **Forwarded port (OpenVPN):** `curl -u gluetun:<pass> -fsS http://${LAN_IP}:8000/v1/openvpn/portforwarded`
 * **Force qB to current PF:** `pvpn portsync`
 
-If you change default folders/ports in the script, update the mounts/ports in `~/srv/arr-stack/docker-compose.yml` accordingly and run:
+To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `127.0.0.1` for localhost or `0.0.0.0` for all) and rerun:
 
 ```bash
 cd ~/srv/arr-stack
