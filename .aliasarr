@@ -1,14 +1,17 @@
-# ~/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
-# Source from your shell:  [ -f "$HOME/srv/.aliasarr" ] && source "$HOME/srv/.aliasarr"
+# arr-stack/.aliasarr — helpers & aliases for ARR+Gluetun+ProtonVPN stack
+# Source from your shell:  [ -f "$ARR_STACK_DIR/.aliasarr" ] && source "$ARR_STACK_DIR/.aliasarr"
 # Assumes the merged installer’s defaults; override via env before sourcing:
 #   export ARR_BASE="$HOME/srv"
 #   export ARR_STACK_DIR="$ARR_BASE/arr-stack"
 #   export ARR_DOCKER_DIR="$ARR_BASE/docker"
+#   export ARR_BACKUP_DIR="$ARR_BASE/backups"
+#   export ARR_ENV_FILE="$ARR_STACK_DIR/.env"
 
 # ----------------[ Core paths ]----------------
 ARR_BASE="${ARR_BASE:-$HOME/srv}"
 ARR_STACK_DIR="${ARR_STACK_DIR:-$ARR_BASE/arr-stack}"
 ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-$ARR_BASE/docker}"
+ARR_BACKUP_DIR="${ARR_BACKUP_DIR:-$ARR_BASE/backups}"
 ARR_ENV_FILE="${ARR_ENV_FILE:-$ARR_STACK_DIR/.env}"
 ARR_DC="docker compose --env-file \"$ARR_ENV_FILE\" -f \"$ARR_STACK_DIR/docker-compose.yml\""
 
@@ -36,11 +39,11 @@ arr.stats()    { docker stats --no-stream $(printf "%s " "${ARR_SERVICES[@]}") 2
 arr.shell()    { local s="${1:?service}"; docker exec -it "$s" /bin/bash 2>/dev/null || docker exec -it "$s" /bin/sh; }
 arr.health()   { for s in "${ARR_SERVICES[@]}"; do printf "%-14s : %s\n" "$s" "$(docker inspect --format '{{.State.Health.Status}}' "$s" 2>/dev/null || echo n/a)"; done; }
 arr.backup()   {
-  local ts dir out base="$ARR_DOCKER_DIR" dst="$ARR_BASE/backups/cli-$(_arr_now)";
+  local src="$ARR_DOCKER_DIR" dst="$ARR_BACKUP_DIR/cli-$(_arr_now)"
   mkdir -p "$dst"
   for s in "${ARR_SERVICES[@]}"; do
-    dir="$base/$s"; out="$dst/${s}-config.tgz"
-    [[ -d "$dir" ]] && tar -C "$base" -czf "$out" "$s" && echo "saved -> $out"
+    local dir="$src/$s" out="$dst/${s}-config.tgz"
+    [[ -d "$dir" ]] && tar -C "$src" -czf "$out" "$s" && echo "saved -> $out"
   done
   echo "Backups in $dst"
 }
@@ -69,14 +72,14 @@ arr.open()     {
 # (This folds in the previous `pvpn` helper.)
 pvpn() {
   local cmd="${1:-}"; shift || true
-  local BASE="$ARR_BASE"; local STACK_DIR="$ARR_STACK_DIR"; local ENV_FILE="$ARR_ENV_FILE"
-  local CREDS_FILE="$ARR_DOCKER_DIR/gluetun/proton-credentials.conf"
+  local stack_dir="$ARR_STACK_DIR"; local env_file="$ARR_ENV_FILE"
+  local creds_file="${PROTON_CREDS_FILE:-$ARR_DOCKER_DIR/gluetun/proton-credentials.conf}"
   _get(){ _arr_get "$1"; }
-  _set(){ local k="$1" v="$2"; sed -i "/^${k}=/d" "$ENV_FILE" 2>/dev/null; [[ -n "$v" ]] && echo "${k}=${v}" >>"$ENV_FILE"; }
-  _restart(){ ( cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" restart gluetun ); }
+  _set(){ local k="$1" v="$2"; sed -i "/^${k}=/d" "$env_file" 2>/dev/null; [[ -n "$v" ]] && echo "${k}=${v}" >>"$env_file"; }
+  _restart(){ ( cd "$stack_dir" && docker compose --env-file "$env_file" restart gluetun ); }
 
   case "$cmd" in
-    c|connect)   ( cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" up -d gluetun qbittorrent );;
+    c|connect)   ( cd "$stack_dir" && docker compose --env-file "$env_file" up -d gluetun qbittorrent );;
     r|reconnect) _restart;;
     mode)
       case "${1:-}" in
@@ -88,12 +91,12 @@ pvpn() {
       local user pass
       read -rp "Proton username (without +pmp): " user
       read -rsp "Password: " pass; echo
-      sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "$CREDS_FILE" 2>/dev/null || true
-      echo "PROTON_USER=${user}" >>"$CREDS_FILE"
-      echo "PROTON_PASS=${pass}" >>"$CREDS_FILE"
-      sed -i '/^OPENVPN_USER=/d' "$ENV_FILE" 2>/dev/null || true
-      echo "OPENVPN_USER=${user}+pmp" >>"$ENV_FILE"
-      echo "PROTON_PASS=${pass}" >>"$ENV_FILE"
+      sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "$creds_file" 2>/dev/null || true
+      echo "PROTON_USER=${user}" >>"$creds_file"
+      echo "PROTON_PASS=${pass}" >>"$creds_file"
+      sed -i '/^OPENVPN_USER=/d' "$env_file" 2>/dev/null || true
+      echo "OPENVPN_USER=${user}+pmp" >>"$env_file"
+      echo "PROTON_PASS=${pass}" >>"$env_file"
       echo "Updated creds. Restarting gluetun…"
       _restart;;
     s|status)
@@ -232,4 +235,4 @@ alias pvpnconnect='pvpn connect'
 alias pvpnreconnect='pvpn reconnect'
 alias pvpnmode='pvpn mode'
 
-# End of ~/.aliasarr
+# End of arr-stack/.aliasarr

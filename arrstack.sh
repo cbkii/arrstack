@@ -6,11 +6,11 @@ set -euo pipefail
 
 # ----------------------------[ USER CONFIG ]-----------------------------------
 USER_NAME="${USER:-$(id -un)}"
-BASE="/home/${USER_NAME}/srv"
-DOCKER_DIR="${BASE}/docker"
-STACK_DIR="${BASE}/arr-stack"
-BACKUP_DIR="${BASE}/backups"
-PVPN_SRC="${BASE}/pvpn-backup" # Put Proton files (.conf, etc.) here
+ARR_BASE="/home/${USER_NAME}/srv"
+ARR_DOCKER_DIR="${ARR_BASE}/docker"
+ARR_STACK_DIR="${ARR_BASE}/arr-stack"
+ARR_BACKUP_DIR="${ARR_BASE}/backups"
+ARR_PVPN_SRC="${ARR_BASE}/pvpn-backup" # Put Proton files (.conf, etc.) here
 
 # Media/Downloads layout
 MEDIA_DIR="/media/mediasmb"
@@ -34,8 +34,8 @@ TZ_AU="Australia/Sydney"
 DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
 SERVER_COUNTRIES="Netherlands,Germany,Switzerland"
 DEFAULT_COUNTRY="Australia"
-PROTON_CREDS_FILE="${DOCKER_DIR}/gluetun/proton-credentials.conf"
-PROTON_CREDS_FBAK="${PVPN_SRC}/proton-credentials.conf"
+PROTON_CREDS_FILE="${ARR_DOCKER_DIR}/gluetun/proton-credentials.conf"
+PROTON_CREDS_FBAK="${ARR_PVPN_SRC}/proton-credentials.conf"
 GLUETUN_API_KEY=""
 
 # Service/package lists (kept at least as broad as originals)
@@ -52,7 +52,7 @@ DEBUG="${DEBUG:-0}"
 NO_COLOR="${NO_COLOR:-0}"
 
 # Export for compose templating
-export BASE DOCKER_DIR STACK_DIR BACKUP_DIR PVPN_SRC
+export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_PVPN_SRC
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_HTTP_PORT_HOST QBT_USER QBT_PASS PUID PGID TZ_AU
 export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK GLUETUN_API_KEY
@@ -124,7 +124,7 @@ check_deps() {
 
 # ----------------------------[ CLEANUP PHASE ]---------------------------------
 compose_cmd() { (
-  cd "${STACK_DIR}" 2>/dev/null || return 0
+  cd "${ARR_STACK_DIR}" 2>/dev/null || return 0
   run_cmd docker compose "$@"
 ); }
 stop_stack_if_present() {
@@ -155,18 +155,18 @@ stop_native_services() {
   run_cmd sudo systemctl daemon-reload || true
 }
 fix_permissions_on_base() {
-  note "Fixing permissions under ${BASE}"
-  if [[ -d "${BASE}" ]]; then
+  note "Fixing permissions under ${ARR_BASE}"
+  if [[ -d "${ARR_BASE}" ]]; then
     note "Removing root-owned Docker artefacts (logs/pids/locks/servers.json)"
-    run_cmd sudo find "${BASE}" -name "servers.json" -exec rm -f {} \; 2>/dev/null || true
-    run_cmd sudo find "${BASE}" -name "*.log" -path "*/gluetun/*" -exec rm -f {} \; 2>/dev/null || true
-    run_cmd sudo find "${BASE}" -name "*.pid" -exec rm -f {} \; 2>/dev/null || true
-    run_cmd sudo find "${BASE}" -name "*.lock" -exec rm -f {} \; 2>/dev/null || true
-    note "chown -R ${USER_NAME}:${USER_NAME} ${BASE}"
-    run_cmd sudo chown -R "${USER_NAME}:${USER_NAME}" "${BASE}" 2>/dev/null || true
+    run_cmd sudo find "${ARR_BASE}" -name "servers.json" -exec rm -f {} \; 2>/dev/null || true
+    run_cmd sudo find "${ARR_BASE}" -name "*.log" -path "*/gluetun/*" -exec rm -f {} \; 2>/dev/null || true
+    run_cmd sudo find "${ARR_BASE}" -name "*.pid" -exec rm -f {} \; 2>/dev/null || true
+    run_cmd sudo find "${ARR_BASE}" -name "*.lock" -exec rm -f {} \; 2>/dev/null || true
+    note "chown -R ${USER_NAME}:${USER_NAME} ${ARR_BASE}"
+    run_cmd sudo chown -R "${USER_NAME}:${USER_NAME}" "${ARR_BASE}" 2>/dev/null || true
     note "Standardising directory/file permissions"
-    run_cmd find "${BASE}" -type d -exec chmod 755 {} \; 2>/dev/null || true
-    run_cmd find "${BASE}" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    run_cmd find "${ARR_BASE}" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    run_cmd find "${ARR_BASE}" -type f -exec chmod 644 {} \; 2>/dev/null || true
   fi
 }
 clean_targeted_volumes() {
@@ -177,21 +177,21 @@ clean_targeted_volumes() {
 # -------------------------[ DIRECTORIES & BACKUP ]-----------------------------
 create_dirs() {
   step "1/13 Creating folders"
-  ensure_dir "${STACK_DIR}"
-  ensure_dir "${BACKUP_DIR}"
-  for d in gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr scripts; do ensure_dir "${DOCKER_DIR}/${d}"; done
+  ensure_dir "${ARR_STACK_DIR}"
+  ensure_dir "${ARR_BACKUP_DIR}"
+  for d in gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr scripts; do ensure_dir "${ARR_DOCKER_DIR}/${d}"; done
   for d in "${MEDIA_DIR}" "${DOWNLOADS_DIR}" "${COMPLETED_DIR}" "${MEDIA_DIR}" "${MOVIES_DIR}" "${TV_DIR}" "${SUBS_DIR}"; do ensure_dir "$d"; done
 }
 backup_configs() {
   step "2/13 Backing up ALL existing configurations"
   local TS
   TS="$(date +%Y%m%d-%H%M%S)"
-  BACKUP_SUBDIR="${BACKUP_DIR}/backup-${TS}"
+  BACKUP_SUBDIR="${ARR_BACKUP_DIR}/backup-${TS}"
   ensure_dir "${BACKUP_SUBDIR}"
   # Docker configs
   for APP in qbittorrent sonarr radarr prowlarr bazarr jackett lidarr readarr transmission gluetun flaresolverr; do
-    if [[ -d "${DOCKER_DIR}/${APP}" ]]; then
-      run_cmd tar -C "${DOCKER_DIR}" -czf "${BACKUP_SUBDIR}/docker-${APP}-config.tgz" "${APP}" 2>/dev/null || true
+    if [[ -d "${ARR_DOCKER_DIR}/${APP}" ]]; then
+      run_cmd tar -C "${ARR_DOCKER_DIR}" -czf "${BACKUP_SUBDIR}/docker-${APP}-config.tgz" "${APP}" 2>/dev/null || true
       note "Saved ${BACKUP_SUBDIR}/docker-${APP}-config.tgz"
     fi
   done
@@ -242,7 +242,7 @@ final_docker_cleanup() {
 # ---------------------------[ PROTON CREDS ]----------------------------------
 ensure_creds_template() {
   step "6/13 Ensuring Proton credential file"
-  ensure_dir "${DOCKER_DIR}/gluetun"
+  ensure_dir "${ARR_DOCKER_DIR}/gluetun"
   if [[ ! -f "${PROTON_CREDS_FILE}" ]]; then
     if [[ -f "${PROTON_CREDS_FBAK}" ]]; then
       cp "$PROTON_CREDS_FBAK" "${PROTON_CREDS_FILE}"
@@ -272,7 +272,7 @@ ensure_pmp() {
 # ---- WireGuard auto-seed from a .conf if present ----------------------------
 find_wg_conf() {
   local n="${1:-proton.conf}" c
-  for c in "${DOCKER_DIR}/gluetun/${n}" "${DOCKER_DIR}/gluetun"/*.conf "${PVPN_SRC}"/*.conf; do
+  for c in "${ARR_DOCKER_DIR}/gluetun/${n}" "${ARR_DOCKER_DIR}/gluetun"/*.conf "${ARR_PVPN_SRC}"/*.conf; do
     [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }
   done
   return 1
@@ -295,7 +295,7 @@ make_gluetun_apikey() {
 }
 write_gluetun_auth() {
   step "8/13 Writing Gluetun RBAC config"
-  local AUTH_DIR="${DOCKER_DIR}/gluetun/auth"
+  local AUTH_DIR="${ARR_DOCKER_DIR}/gluetun/auth"
   ensure_dir "$AUTH_DIR"
   local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="public"\nauth="none"\nroutes=["GET /v1/publicip/ip"]\n\n[[roles]]\nname="port-monitor"\nauth="apikey"\napikey="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/publicip/ip","GET /v1/openvpn/portforwarded","GET /v1/openvpn/status","GET /v1/wireguard/portforwarded","GET /v1/wireguard/status"]\n'
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
@@ -304,8 +304,8 @@ write_gluetun_auth() {
 # ---------------------------[ PORT MONITOR ]-----------------------------------
 create_pf_monitor() {
   step "9/13 Creating PF monitor script"
-  local F="${DOCKER_DIR}/scripts/port-monitor.sh"
-  ensure_dir "${DOCKER_DIR}/scripts"
+  local F="${ARR_DOCKER_DIR}/scripts/port-monitor.sh"
+  ensure_dir "${ARR_DOCKER_DIR}/scripts"
   cat >"$F" <<'SCRIPT'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -330,8 +330,8 @@ SCRIPT
 # ------------------------------[ .ENV FILE ]-----------------------------------
 write_env() {
   step "10/13 Writing stack .env"
-  local envf="${STACK_DIR}/.env"
-  ensure_dir "${STACK_DIR}"
+  local envf="${ARR_STACK_DIR}/.env"
+  ensure_dir "${ARR_STACK_DIR}"
   local PU="" PP="" WG="" VM="${DEFAULT_VPN_MODE}" CN="${SERVER_COUNTRIES}"
   if [[ -f "${PROTON_CREDS_FILE}" ]]; then
     PU="$(grep -E '^PROTON_USER=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || true)"
@@ -357,8 +357,10 @@ QBT_USER=${QBT_USER}
 QBT_PASS=${QBT_PASS}
 
 # Paths
-BASE=${BASE}
-DOCKER_DIR=${DOCKER_DIR}
+ARR_BASE=${ARR_BASE}
+ARR_STACK_DIR=${ARR_STACK_DIR}
+ARR_DOCKER_DIR=${ARR_DOCKER_DIR}
+ARR_BACKUP_DIR=${ARR_BACKUP_DIR}
 MEDIA_DIR=${MEDIA_DIR}
 DOWNLOADS_DIR=${DOWNLOADS_DIR}
 COMPLETED_DIR=${COMPLETED_DIR}
@@ -383,7 +385,7 @@ EOF
 # ---------------------------[ COMPOSE FILE ]-----------------------------------
 write_compose() {
   step "11/13 Writing docker-compose.yml"
-  cat >"${STACK_DIR}/docker-compose.yml" <<'YAML'
+  cat >"${ARR_STACK_DIR}/docker-compose.yml" <<'YAML'
 services:
   gluetun:
     image: qmcgaw/gluetun:latest
@@ -414,8 +416,8 @@ services:
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
     volumes:
-      - ${DOCKER_DIR}/gluetun:/gluetun
-      - ${DOCKER_DIR}/gluetun/auth/config.toml:/gluetun/auth/config.toml:ro
+      - ${ARR_DOCKER_DIR}/gluetun:/gluetun
+      - ${ARR_DOCKER_DIR}/gluetun/auth/config.toml:/gluetun/auth/config.toml:ro
     ports:
       - "127.0.0.1:8000:8000"          # Gluetun control API (host-local)
       - "${QBT_HTTP_PORT_HOST}:8080"   # qB WebUI via gluetun namespace
@@ -447,10 +449,10 @@ services:
       - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
       - VPN_TYPE=${VPN_MODE}
     volumes:
-      - ${DOCKER_DIR}/qbittorrent:/config
+      - ${ARR_DOCKER_DIR}/qbittorrent:/config
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
-      - ${DOCKER_DIR}/scripts:/scripts:ro
+      - ${ARR_DOCKER_DIR}/scripts:/scripts:ro
     depends_on:
       gluetun:
         condition: service_healthy
@@ -476,7 +478,7 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
-      - ${DOCKER_DIR}/sonarr:/config
+      - ${ARR_DOCKER_DIR}/sonarr:/config
       - ${TV_DIR}:/tv
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
@@ -502,7 +504,7 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
-      - ${DOCKER_DIR}/radarr:/config
+      - ${ARR_DOCKER_DIR}/radarr:/config
       - ${MOVIES_DIR}:/movies
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
@@ -528,7 +530,7 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
-      - ${DOCKER_DIR}/prowlarr:/config
+      - ${ARR_DOCKER_DIR}/prowlarr:/config
     depends_on:
       qbittorrent:
         condition: service_healthy
@@ -549,7 +551,7 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
-      - ${DOCKER_DIR}/bazarr:/config
+      - ${ARR_DOCKER_DIR}/bazarr:/config
       - ${TV_DIR}:/tv
       - ${MOVIES_DIR}:/movies
       - ${SUBS_DIR}:/subs
@@ -583,12 +585,12 @@ services:
       start_period: 60s
     restart: unless-stopped
 YAML
-  ok "Wrote ${STACK_DIR}/docker-compose.yml"
+  ok "Wrote ${ARR_STACK_DIR}/docker-compose.yml"
 }
 
 # ------------------------------[ STARTUP ]-------------------------------------
 validate_creds_or_die() {
-  local PU PP ENVF="${STACK_DIR}/.env"
+  local PU PP ENVF="${ARR_STACK_DIR}/.env"
   PU="$(grep -E '^PROTON_USER=' "$ENVF" | cut -d= -f2- || true)"
   PP="$(grep -E '^PROTON_PASS=' "$ENVF" | cut -d= -f2- || true)"
   if [[ -z "${PU}" || -z "${PP}" ]]; then
@@ -644,38 +646,31 @@ start_with_checks() {
   curl -fsS http://127.0.0.1:8000/v1/openvpn/portforwarded || true
 }
 
-# ------------------------------[ HELPERS ]-------------------------------------
-install_pvpn_helper() {
-  local F="${BASE}/.vpn_aliases"
-  cat >"$F" <<'PVPN'
-# Helper for ProtonVPN + Gluetun control
-pvpn(){
-  local cmd="${1:-}"; shift || true
-  local BASE="/home/${USER:-$(id -un)}/srv"; local STACK_DIR="${BASE}/arr-stack"; local ENV_FILE="${STACK_DIR}/.env"; local CREDS_FILE="${BASE}/docker/gluetun/proton-credentials.conf"
-  _get(){ grep -E "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || true; }
-  _restart(){ (cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" restart gluetun) }
-  case "$cmd" in
-    c|connect) echo "Starting gluetun + qB…"; (cd "$STACK_DIR" && docker compose --env-file "$ENV_FILE" up -d gluetun qbittorrent) || return 1;;
-    r|reconnect) _restart || return 1;;
-    creds) local user pass; read -p "Proton username (without +pmp): " user; read -s -p "Password: " pass; echo; sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "$CREDS_FILE" 2>/dev/null || true; echo "PROTON_USER=${user}" >>"$CREDS_FILE"; echo "PROTON_PASS=${pass}" >>"$CREDS_FILE"; sed -i '/^OPENVPN_USER=/d' "$ENV_FILE" 2>/dev/null || true; echo "OPENVPN_USER=${user}+pmp" >>"$ENV_FILE"; echo "PROTON_PASS=${pass}" >>"$ENV_FILE"; echo "Updated creds. Restarting gluetun…"; _restart;;
-    s|status) echo "-- Gluetun --"; docker ps --filter name=gluetun --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | tail -n +1; echo "-- Public IP --"; curl -fsS localhost:8000/v1/publicip/ip || echo N/A; echo "-- Forwarded port --"; curl -fsS localhost:8000/v1/openvpn/portforwarded || echo N/A; echo "-- qB listen --"; curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/preferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" 2>/dev/null | jq -r '.listen_port // empty' || echo N/A;;
-    portsync) local pf; pf=$(curl -fsS localhost:8000/v1/openvpn/portforwarded 2>/dev/null | jq -r '.port // empty' || true); [ -n "$pf" ] && curl -fsS "http://127.0.0.1:$( _get QBT_HTTP_PORT_HOST )/api/v2/app/setPreferences" --data "username=${QBT_USER:-admin}&password=${QBT_PASS:-adminadmin}" --data-urlencode "json={\"listen_port\":${pf},\"upnp\":false}" >/dev/null 2>&1 && echo "qB port set to ${pf}" || echo "No PF yet";;
-    *) cat <<USAGE
-Usage: pvpn <command>
-  c, connect         Start gluetun + qB
-  r, reconnect       Restart gluetun
-  creds              Update Proton creds (enforces +pmp)
-  s, status          Show public IP, forwarded port, qB listen port
-  portsync           Sync qB listen port now
-USAGE
-       ;;
-  esac
-}
-PVPN
-  local SHELLRC="/home/${USER_NAME}/.bashrc"
-  local SRC="[ -f ${F} ] && source ${F}"
-  grep -Fq "$SRC" "$SHELLRC" 2>/dev/null || echo "$SRC" >>"$SHELLRC"
-  ok "pvpn helper installed"
+
+install_aliases() {
+  step "Installing ARR helper aliases"
+  local src="$(dirname "${BASH_SOURCE[0]}")/.aliasarr"
+  local dst="${ARR_STACK_DIR}/.aliasarr"
+  run_cmd cp "$src" "$dst"
+  local shellrc="/home/${USER_NAME}/.zshrc"
+  local line="[ -f \"$dst\" ] && source \"$dst\""
+  if ! grep -Fq "$line" "$shellrc" 2>/dev/null; then
+    if is_dry; then
+      note "[DRY] append ARR vars and source to $shellrc"
+    else
+      {
+        printf '%s\n' "export ARR_BASE=\"$ARR_BASE\""
+        printf '%s\n' "export ARR_STACK_DIR=\"$ARR_STACK_DIR\""
+        printf '%s\n' "export ARR_DOCKER_DIR=\"$ARR_DOCKER_DIR\""
+        printf '%s\n' "export ARR_BACKUP_DIR=\"$ARR_BACKUP_DIR\""
+        printf '%s\n' "export ARR_ENV_FILE=\"$ARR_STACK_DIR/.env\""
+        printf '%s\n' "$line"
+      } >> "$shellrc"
+    fi
+    ok "ARR aliases added to $shellrc"
+  else
+    ok "ARR aliases already present in $shellrc"
+  fi
 }
 
 # --------------------------------[ MAIN ]--------------------------------------
@@ -699,13 +694,13 @@ main() {
   create_pf_monitor
   write_env
   # Optional: auto-seed WG key from a .conf if none set
-  if ! grep -q '^WIREGUARD_PRIVATE_KEY=' "${STACK_DIR}/.env" || [[ -z "$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${STACK_DIR}/.env" | cut -d= -f2-)" ]]; then
+  if ! grep -q '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" || [[ -z "$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2-)" ]]; then
     if CONF="$(find_wg_conf || true)"; then
       if read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null); then
-        sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^DNS_ADDRESS=/d' "${STACK_DIR}/.env"
-        echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${STACK_DIR}/.env"
-        [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${STACK_DIR}/.env"
-        [ -n "$D" ] && echo "DNS_ADDRESS=${D}" >>"${STACK_DIR}/.env"
+        sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
+        echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
+        [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${ARR_STACK_DIR}/.env"
+        [ -n "$D" ] && echo "DNS_ADDRESS=${D}" >>"${ARR_STACK_DIR}/.env"
         ok "Seeded WG from $(basename "$CONF")"
       fi
     fi
@@ -713,7 +708,7 @@ main() {
   write_compose
   pull_images
   start_with_checks
-  install_pvpn_helper
+  install_aliases
   echo
   ok "Done. Next steps:"
   echo "  • Edit ${PROTON_CREDS_FILE} (username WITHOUT +pmp) if you haven't already."
