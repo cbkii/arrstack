@@ -19,7 +19,7 @@ LAN_IP="192.168.1.50" # set to your host's LAN IP
 MEDIA_DIR="/media/mediasmb"
 DOWNLOADS_DIR="/home/${USER_NAME}/downloads"
 COMPLETED_DIR="${DOWNLOADS_DIR}/completed"
-MOVIES_DIR="${MEDIA_DIR}/movies"
+MOVIES_DIR="${MEDIA_DIR}/Movies"
 TV_DIR="${MEDIA_DIR}/Shows"
 SUBS_DIR="${MEDIA_DIR}/subs"
 
