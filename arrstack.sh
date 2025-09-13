@@ -646,7 +646,8 @@ start_with_checks() {
 
 install_aliases() {
   step "Installing ARR helper aliases"
-  local src="$(dirname "${BASH_SOURCE[0]}")/.aliasarr"
+  local src
+  src="$(dirname "${BASH_SOURCE[0]}")/.aliasarr"
   local dst="${ARR_STACK_DIR}/.aliasarr"
   run_cmd cp "$src" "$dst"
   local shellrc="/home/${USER_NAME}/.zshrc"
