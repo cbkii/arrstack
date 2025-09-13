@@ -34,14 +34,16 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
 ## Quick start
 
-1. **Create a working directory and pull the project:**
+1. **Clone the repository to its own folder:**
 
    ```bash
    mkdir -p ~/srv && cd ~/srv
-   git clone https://github.com/cbkii/arrstack.git arr-stack
-   cd arr-stack
+   git clone https://github.com/cbkii/arrstack.git arrstackrepo
+   cd arrstackrepo
    chmod +x arrstack.sh
    ```
+
+   The installer writes configuration and runtime files under `~/srv/arr-stack`, keeping the Git checkout clean.
 
 2. **Review and customise configuration:**
 
@@ -136,7 +138,7 @@ If you have a Proton **WireGuard** `.conf`:
   The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file.
 
 ```bash
-~/srv/arr-stack/arrstack.sh
+~/srv/arrstackrepo/arrstack.sh
 ```
 
 Or:
@@ -180,8 +182,7 @@ All services bind to `LAN_IP` (`192.168.1.50` by default).
 To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `127.0.0.1` for localhost or `0.0.0.0` for all) and rerun:
 
 ```bash
-cd ~/srv/arr-stack
-docker compose up -d
+~/srv/arrstackrepo/arrstack.sh
 ```
 
 ---
