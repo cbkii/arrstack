@@ -238,7 +238,13 @@ purge_native_packages() {
 }
 final_docker_cleanup() {
   step "5/12 Final Docker cleanup pass"
-  for CONTAINER in ${ALL_CONTAINERS}; do if docker ps -aq --filter "name=${CONTAINER}" | grep -q .; then run_cmd docker rm -f $(docker ps -aq --filter "name=${CONTAINER}") >/dev/null 2>&1 || true; else note "No leftover ${CONTAINER}"; fi; done
+  for CONTAINER in ${ALL_CONTAINERS}; do
+    if docker ps -aq --filter "name=${CONTAINER}" | grep -q .; then
+      run_cmd docker rm -f "$(docker ps -aq --filter "name=${CONTAINER}")" >/dev/null 2>&1 || true
+    else
+      note "No leftover ${CONTAINER}"
+    fi
+  done
   ok "Docker containers cleaned"
 }
 
