@@ -20,11 +20,13 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
 - Debian/Ubuntu-like system.
   - Docker & Compose v2, plus basic tools.
+- ProtonVPN Plus or Unlimited plan with **port forwarding**.
+  - Have your Proton OpenVPN/IKEv2 username and password ready.
 
-  Install (if needed):
+  Install Docker & tools (if needed):
   ```bash
   sudo apt update
-  sudo apt install -y docker.io docker-compose-plugin curl openssl iproute2
+  sudo apt install -y docker.io docker-compose-plugin curl wget openssl iproute2
   sudo systemctl enable --now docker
   ```
 
@@ -32,26 +34,37 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
 ## Quick start
 
-1. **Save the installer** (and optional uninstaller) somewhere, e.g.:
+1. **Clone the repository to its own folder:**
 
    ```bash
    mkdir -p ~/srv && cd ~/srv
-   nano arrstack.sh             # paste the installer
-   nano arrstack-uninstall.sh   # optional reset script
-   chmod +x arrstack.sh arrstack-uninstall.sh
+   git clone https://github.com/cbkii/arrstack.git arrstackrepo
+   cd arrstackrepo
+   chmod +x arrstack.sh
    ```
 
-2. **Run the installer** as your normal user:
+   The installer writes configuration and runtime files under `~/srv/arr-stack`, keeping the Git checkout clean.
+
+2. **Review and customise configuration:**
+
+   * Open `arrstack.sh` and adjust the variables in the `USER CONFIG` section.
+   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
 
    ```bash
-   ~/srv/arrstack.sh
+   nano arrstack.sh             # paste the installer
+   nano arrstack-uninstall.sh   # optional reset script
+   ```
+   
+3. **Run it** as your normal user:
+
+   ```bash
+   ./arrstack.sh
    ```
 
-   * It will create folder structure, backups, config files and **prompt for ProtonVPN credentials** if they’re not already set.
-   * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
-   * To **reset a previous install** (backing up configs to `~/srv/backups/uninstall-<timestamp>/`), run `arrstack-uninstall.sh` first and then re-run the installer.
+     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if they’re not already set.
+     * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
 
-  3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
+4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
      * **qBittorrent:** `http://<LAN_IP>:8080` – installer prints an initial password; set `${QBT_USER}/${QBT_PASS}` before installation to preseed.
      * **Sonarr:** `http://<LAN_IP>:8989`
@@ -75,10 +88,11 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 * App data: `~/srv/docker/<service>`
 * Downloads: `~/downloads` → mounted in qB as `/downloads`
 * Completed: `~/downloads/completed` → `/completed`
-* Media libraries (examples):
+* Media libraries (defaults):
 
-  * TV: `/media/mediasmb/library/tv` → `/tv`
-  * Movies: `/media/mediasmb/library/movies` → `/movies`
+  * TV: `/media/mediasmb/Shows` → `/tv`
+  * Movies: `/media/mediasmb/Movies` → `/movies`
+  * Subs: `/media/mediasmb/subs` → `/subs`
 
   In each Arr app, add the **qBittorrent** client and make sure paths match these container paths.
 
@@ -129,7 +143,7 @@ If you have a Proton **WireGuard** `.conf`:
   The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file. For a **full reset**, run `arrstack-uninstall.sh` (backups to `~/srv/backups/`) and then reinstall.
 
 ```bash
-~/srv/arrstack.sh
+~/srv/arrstackrepo/arrstack.sh
 ```
 
 Or:
@@ -173,8 +187,7 @@ All services bind to `LAN_IP` (`192.168.1.50` by default).
 To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `127.0.0.1` for localhost or `0.0.0.0` for all) and rerun:
 
 ```bash
-cd ~/srv/arr-stack
-docker compose up -d
+~/srv/arrstackrepo/arrstack.sh
 ```
 
 ---

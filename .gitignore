@@ -1,0 +1,51 @@
+# Build and dependency directories
+node_modules/
+bower_components/
+dist/
+build/
+
+# Package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+*.bak
+*.orig
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.venv/
+venv/
+
+# Misc
+.idea/
+.vscode/
+coverage/
+*.cover
+*.db
+
+# arrstack installer outputs
+docker-compose.yml
+backups/
+docker/
+
