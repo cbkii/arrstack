@@ -179,15 +179,12 @@ docker compose up -d
 
 ## Uninstall / restore
 
-Stop the stack:
+Run the provided `arrstack-uninstall.sh` script to back up existing configurations to `~/arrs-bak/<timestamp>/` and remove Docker containers, native packages and related files.
 
 ```bash
-cd ~/srv/arr-stack
-docker compose down
+~/srv/arrstack-uninstall.sh
 ```
 
-Backups live under `~/srv/backups/backup-YYYYmmdd-HHMMSS/`.
-You can restore any app’s tarball to its previous location if you want to go back to native installs later.
 
 ---
 
