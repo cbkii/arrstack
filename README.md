@@ -50,6 +50,11 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
    * Open `arrstack.sh` and adjust the variables in the `USER CONFIG` section.
    * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
 
+   ```bash
+   nano arrstack.sh             # paste the installer
+   nano arrstack-uninstall.sh   # optional reset script
+   ```
+   
 3. **Run it** as your normal user:
 
    ```bash
@@ -135,7 +140,7 @@ If you have a Proton **WireGuard** `.conf`:
 
 ## Update the stack
 
-  The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file.
+  The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file. For a **full reset**, run `arrstack-uninstall.sh` (backups to `~/srv/backups/`) and then reinstall.
 
 ```bash
 ~/srv/arrstackrepo/arrstack.sh
@@ -189,15 +194,12 @@ To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `127.0.0.1` for localh
 
 ## Uninstall / restore
 
-Stop the stack:
+Run the provided `arrstack-uninstall.sh` script to back up existing configurations to `~/srv/backups/uninstall-<timestamp>/` and remove Docker containers, native packages and related files. After cleanup you can re-run `arrstack.sh` to reinstall. Restores can be made by extracting the archives from the backup directory back to their original locations.
 
 ```bash
-cd ~/srv/arr-stack
-docker compose down
+~/srv/arrstack-uninstall.sh
 ```
 
-Backups live under `~/srv/backups/backup-YYYYmmdd-HHMMSS/`.
-You can restore any app’s tarball to its previous location if you want to go back to native installs later.
 
 ---
 
