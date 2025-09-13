@@ -20,11 +20,13 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
 - Debian/Ubuntu-like system.
   - Docker & Compose v2, plus basic tools.
+- ProtonVPN Plus or Unlimited plan with **port forwarding**.
+  - Have your Proton OpenVPN/IKEv2 username and password ready.
 
-  Install (if needed):
+  Install Docker & tools (if needed):
   ```bash
   sudo apt update
-  sudo apt install -y docker.io docker-compose-plugin curl openssl iproute2
+  sudo apt install -y docker.io docker-compose-plugin curl wget openssl iproute2
   sudo systemctl enable --now docker
   ```
 
@@ -32,24 +34,30 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
 ## Quick start
 
-1. **Save the installer script** (the merged `arr-stack` installer) somewhere, e.g.:
+1. **Create a working directory and pull the project:**
 
    ```bash
    mkdir -p ~/srv && cd ~/srv
-   nano arrstack.sh    # paste the script
+   git clone https://github.com/cbkii/arrstack.git arr-stack
+   cd arr-stack
    chmod +x arrstack.sh
    ```
 
-2. **Run it** as your normal user:
+2. **Review and customise configuration:**
+
+   * Open `arrstack.sh` and adjust the variables in the `USER CONFIG` section.
+   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
+
+3. **Run it** as your normal user:
 
    ```bash
-   ~/srv/arrstack.sh
+   ./arrstack.sh
    ```
 
-   * It will create folder structure, backups, config files and **prompt for ProtonVPN credentials** if they’re not already set.
-   * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
+     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if they’re not already set.
+     * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
 
-  3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
+4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
      * **qBittorrent:** `http://<LAN_IP>:8080` – installer prints an initial password; set `${QBT_USER}/${QBT_PASS}` before installation to preseed.
      * **Sonarr:** `http://<LAN_IP>:8989`
@@ -73,10 +81,11 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 * App data: `~/srv/docker/<service>`
 * Downloads: `~/downloads` → mounted in qB as `/downloads`
 * Completed: `~/downloads/completed` → `/completed`
-* Media libraries (examples):
+* Media libraries (defaults):
 
-  * TV: `/media/mediasmb/library/tv` → `/tv`
-  * Movies: `/media/mediasmb/library/movies` → `/movies`
+  * TV: `/media/mediasmb/Shows` → `/tv`
+  * Movies: `/media/mediasmb/Movies` → `/movies`
+  * Subs: `/media/mediasmb/subs` → `/subs`
 
   In each Arr app, add the **qBittorrent** client and make sure paths match these container paths.
 
@@ -127,7 +136,7 @@ If you have a Proton **WireGuard** `.conf`:
   The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file.
 
 ```bash
-~/srv/arrstack.sh
+~/srv/arr-stack/arrstack.sh
 ```
 
 Or:
