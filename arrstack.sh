@@ -264,9 +264,9 @@ ensure_creds_template() {
   fi
   if ! grep -q '^PROTON_USER=' "${PROTON_CREDS_FILE}" || ! grep -q '^PROTON_PASS=' "${PROTON_CREDS_FILE}"; then
     local user pass
-    read -p "Proton username (without +pmp): " user
-    read -s -p "Proton password: " pass
-    echo
+    IFS= read -r -p "Proton username (without +pmp): " user
+    IFS= read -r -s -p "Proton password: " pass
+    printf '\n'
     sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "${PROTON_CREDS_FILE}"
     echo "PROTON_USER=${user}" >>"${PROTON_CREDS_FILE}"
     echo "PROTON_PASS=${pass}" >>"${PROTON_CREDS_FILE}"
