@@ -13,7 +13,7 @@ set -euo pipefail
 USER_NAME="${USER:-$(id -un)}"
 ARR_BASE="/home/${USER_NAME}/srv"
 ARR_DOCKER_DIR="${ARR_BASE}/docker"
-ARR_STACK_DIR="${ARR_BASE}/arr-stack"
+ARR_STACK_DIRS=("${ARR_BASE}/arrstack" "${ARR_BASE}/arr-stack")
 ARR_BACKUP_DIR="${ARR_BASE}/backups"
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_SUBDIR="${ARR_BACKUP_DIR}/uninstall-${TS}"
@@ -50,10 +50,12 @@ find_app_dirs() {
 backup_all() {
   step "Backing up existing configuration to ${BACKUP_SUBDIR}"
   ensure_dirs
-  note "Backing up arr-stack directory"
-  if [[ -d "${ARR_STACK_DIR}" ]]; then
-    tar -C "${ARR_BASE}" -czf "${BACKUP_SUBDIR}/arr-stack.tgz" "arr-stack"
-  fi
+  note "Backing up arrstack directories"
+  for d in "${ARR_STACK_DIRS[@]}"; do
+    if [[ -d "$d" ]]; then
+      tar -C "${ARR_BASE}" -czf "${BACKUP_SUBDIR}/$(basename "$d").tgz" "$(basename "$d")"
+    fi
+  done
   note "Backing up docker app configs"
   if [[ -d "${ARR_DOCKER_DIR}" ]]; then
     while IFS= read -r dir; do
@@ -101,9 +103,11 @@ backup_all() {
 
 stop_stack() {
   step "Stopping Docker stack"
-  if [[ -d "${ARR_STACK_DIR}" ]]; then
-    ( cd "${ARR_STACK_DIR}" && docker compose down -v --remove-orphans >/dev/null 2>&1 ) || true
-  fi
+  for d in "${ARR_STACK_DIRS[@]}"; do
+    if [[ -d "$d" ]]; then
+      ( cd "$d" && docker compose down -v --remove-orphans >/dev/null 2>&1 ) || true
+    fi
+  done
   for c in ${ALL_CONTAINERS}; do
     if docker ps -a --format '{{.Names}}' | grep -q "^${c}$"; then
       docker rm -f "${c}" >/dev/null 2>&1 || true
@@ -145,7 +149,9 @@ remove_native() {
 
 remove_files() {
   step "Removing residual files"
-  $SUDO rm -rf "${ARR_STACK_DIR}" "${ARR_DOCKER_DIR}" 2>/dev/null || true
+  for d in "${ARR_STACK_DIRS[@]}" "${ARR_DOCKER_DIR}"; do
+    $SUDO rm -rf "$d" 2>/dev/null || true
+  done
   while IFS= read -r dir; do
     rm -rf "$dir" 2>/dev/null || true
   done < <(find_app_dirs "${HOME}/.config" 1 | sort -u)

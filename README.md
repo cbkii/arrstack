@@ -1,6 +1,6 @@
-# arr-stack
+# arrstack
 
-**arr-stack** bundles ProtonVPN, Gluetun, qBittorrent and the *arr suite into a tidy, beginner‑friendly stack. It runs every service behind ProtonVPN with automatic port forwarding and provides helpful aliases for daily use.
+**arrstack** bundles ProtonVPN, Gluetun, qBittorrent and the *arr suite into a tidy, beginner‑friendly stack. It runs every service behind ProtonVPN with automatic port forwarding and provides helpful aliases for daily use.
 
 By default the stack connects with **OpenVPN** for reliable port forwarding; **WireGuard** can be enabled as an optional fallback.
 
@@ -43,7 +43,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    chmod +x arrstack.sh
    ```
 
-   The installer writes configuration and runtime files under `~/srv/arr-stack`, keeping the Git checkout clean.
+   The installer writes configuration and runtime files under `~/srv/arrstack`, keeping the Git checkout clean.
 
 2. **Review and customise configuration:**
 
@@ -60,7 +60,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    ./arrstack.sh
    ```
 
-     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if they’re not already set.
+     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if `~/srv/docker/gluetun/proton-credentials.conf` is missing. Pre-seed this file (username on line 1, password on line 2, `chmod 600`) or keep a copy at `~/srv/wg-configs/proton-credentials.conf` to restore automatically.
      * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
 
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
@@ -83,7 +83,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 ## Default folders & mapping
 
 * Base: `~/srv`
-* Compose & `.env`: `~/srv/arr-stack`
+* Compose & `.env`: `~/srv/arrstack`
 * App data: `~/srv/docker/<service>`
 * Downloads: `~/downloads` → mounted in qB as `/downloads`
 * Completed: `~/downloads/completed` → `/completed`
@@ -99,11 +99,11 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 ## Daily use
 
-The installer drops helper aliases at `~/srv/arr-stack/.aliasarr` and sources them from `~/.zshrc`:
+The installer drops helper aliases at `~/srv/arrstack/.aliasarr` and sources them from `~/.zshrc`:
 
 ```bash
 # already added to ~/.zshrc
-[ -f ~/srv/arr-stack/.aliasarr ] && source ~/srv/arr-stack/.aliasarr
+[ -f ~/srv/arrstack/.aliasarr ] && source ~/srv/arrstack/.aliasarr
 pvpn status   # show mode, public IP, forwarded port
 ```
 
@@ -124,7 +124,7 @@ pvpn portsync     # force qB to use the currently forwarded port
 
 If you have a Proton **WireGuard** `.conf`:
 
-1. Drop it in `~/srv/docker/gluetun/` or `~/srv/pvpn-backup/`.
+1. Drop it in `~/srv/docker/gluetun/` or `~/srv/wg-configs/`.
 2. Re-run the installer once (it may auto-seed the private key).
 3. Switch when you want:
 
@@ -148,7 +148,7 @@ If you have a Proton **WireGuard** `.conf`:
 Or:
 
 ```bash
-cd ~/srv/arr-stack
+cd ~/srv/arrstack
 docker compose pull
 docker compose up -d
 ```
@@ -203,6 +203,6 @@ Run the provided `arrstack-uninstall.sh` script to back up existing configuratio
 
 ## Notes
 
-* Proton credentials are stored at `~/srv/docker/gluetun/proton-credentials.conf` (`chmod 600`). Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
+* Proton credentials live at `~/srv/docker/gluetun/proton-credentials.conf` (`chmod 600`). Keep a spare copy at `~/srv/wg-configs/proton-credentials.conf` and the installer will seed from it if the main file is missing. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
 * `.env` is also `chmod 600` and only contains what Compose needs.
 * You can customise paths and ports by editing the variables at the top of the script before running it.
