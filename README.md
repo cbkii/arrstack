@@ -32,15 +32,16 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
 ## Quick start
 
-1. **Save the installer script** (the merged `arr-stack` installer) somewhere, e.g.:
+1. **Save the installer** (and optional uninstaller) somewhere, e.g.:
 
    ```bash
    mkdir -p ~/srv && cd ~/srv
-   nano arrstack.sh    # paste the script
-   chmod +x arrstack.sh
+   nano arrstack.sh             # paste the installer
+   nano arrstack-uninstall.sh   # optional reset script
+   chmod +x arrstack.sh arrstack-uninstall.sh
    ```
 
-2. **Run it** as your normal user:
+2. **Run the installer** as your normal user:
 
    ```bash
    ~/srv/arrstack.sh
@@ -48,6 +49,7 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
    * It will create folder structure, backups, config files and **prompt for ProtonVPN credentials** if they’re not already set.
    * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
+   * To **reset a previous install** (backing up configs to `~/arrs-bak/<timestamp>/`), run `arrstack-uninstall.sh` first and then re-run the installer.
 
   3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
@@ -124,7 +126,7 @@ If you have a Proton **WireGuard** `.conf`:
 
 ## Update the stack
 
-  The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file.
+  The installer is safe to re-run; it will pull new images and start cleanly. Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file. For a **full reset**, run `arrstack-uninstall.sh` (backups to `~/arrs-bak/`) and then reinstall.
 
 ```bash
 ~/srv/arrstack.sh
@@ -179,7 +181,7 @@ docker compose up -d
 
 ## Uninstall / restore
 
-Run the provided `arrstack-uninstall.sh` script to back up existing configurations to `~/arrs-bak/<timestamp>/` and remove Docker containers, native packages and related files.
+Run the provided `arrstack-uninstall.sh` script to back up existing configurations to `~/arrs-bak/<timestamp>/` and remove Docker containers, native packages and related files. After cleanup you can re-run `arrstack.sh` to reinstall. Restores can be made by extracting the archives from the `arrs-bak` directory back to their original locations.
 
 ```bash
 ~/srv/arrstack-uninstall.sh
