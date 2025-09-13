@@ -409,7 +409,7 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=127.0.0.1:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
-      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" http://127.0.0.1:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences'
+      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}},\"upnp\":false,\"use_upnp\":false,\"use_natpmp\":false}" http://127.0.0.1:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences'
       - PUID=${PUID}
       - PGID=${PGID}
     volumes:
@@ -634,6 +634,18 @@ start_with_checks() {
     exit 3
   fi
   compose_cmd up -d qbittorrent prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
+  if [[ -z "${QBT_USER}" || -z "${QBT_PASS}" ]]; then
+    sleep 5
+    local qb_line
+    qb_line="$(docker logs qbittorrent 2>&1 | grep -i password | tail -n 1 || true)"
+    if [[ -n "$qb_line" ]]; then
+      note "qBittorrent initial password: ${qb_line##* }"
+    else
+      warn "Could not determine qBittorrent password; check 'docker logs qbittorrent'"
+    fi
+  else
+    ok "qBittorrent credentials preseeded"
+  fi
   compose_cmd ps || true
   note "Public IP:"
   wget -qO- http://${LAN_IP}:8000/v1/publicip/ip || true
@@ -709,7 +721,7 @@ main() {
   echo
   ok "Done. Next steps:"
   echo "  • Edit ${PROTON_CREDS_FILE} (username WITHOUT +pmp) if you haven't already."
-  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (check 'docker logs qbittorrent' for the initial password or set QBT_USER/QBT_PASS before first run)."
+  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (initial password shown above; set QBT_USER/QBT_PASS before first run to preseed)."
 }
 
 main "$@"

@@ -51,7 +51,7 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
   3. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
-     * **qBittorrent:** `http://<LAN_IP>:8080` – first run prints a random password to `docker logs qbittorrent`. Set `${QBT_USER}/${QBT_PASS}` before installation if you want to preseed.
+     * **qBittorrent:** `http://<LAN_IP>:8080` – installer prints an initial password; set `${QBT_USER}/${QBT_PASS}` before installation to preseed.
      * **Sonarr:** `http://<LAN_IP>:8989`
      * **Radarr:** `http://<LAN_IP>:7878`
      * **Prowlarr:** `http://<LAN_IP>:9696`
@@ -62,7 +62,7 @@ Defaults: **OpenVPN** for reliable port forwarding, **WireGuard** available as a
 
      > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
 
-  > Tip: After you log in, change the generated passwords and disable UPnP/NAT-PMP in qBittorrent.
+     > Tip: After you log in, change the generated password. UPnP/NAT-PMP is disabled automatically.
 
 ---
 
