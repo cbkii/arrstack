@@ -54,4 +54,8 @@ docker/
 arrconf/*
 !arrconf/README.md
 !arrconf/.gitkeep
-!arrconf/userconf.sh
+!arrconf/userconf.defaults.sh
+!arrconf/helpers.sh
+
+# user overrides (local only)
+arrconf/userconf.sh
