@@ -71,6 +71,10 @@ backup_all() {
       tar -C "${ARR_BASE}" -czf "${BACKUP_SUBDIR}/$(basename "$d").tgz" "$(basename "$d")"
     fi
   done
+  note "Backing up arrconf directory"
+  if [[ -d "${ARRCONF_DIR}" ]]; then
+    tar -C "$(dirname "${ARRCONF_DIR}")" -czf "${BACKUP_SUBDIR}/arrconf.tgz" "$(basename "${ARRCONF_DIR}")"
+  fi
   note "Backing up docker app configs"
   if [[ -d "${ARR_DOCKER_DIR}" ]]; then
     while IFS= read -r dir; do
@@ -200,7 +204,9 @@ purge_arrconf() {
   read -r -p "Purge arrconf (secrets) directory? (y/N) " ans
   [[ $ans =~ ^[Yy]$ ]] || { note "Kept ${ARRCONF_DIR}"; return 0; }
   mkdir -p "${BACKUP_SUBDIR}"
-  tar -C "$(dirname "$ARRCONF_DIR")" -czf "${BACKUP_SUBDIR}/arrconf.tgz" "$(basename "$ARRCONF_DIR")"
+  if [[ ! -f "${BACKUP_SUBDIR}/arrconf.tgz" ]]; then
+    tar -C "$(dirname "$ARRCONF_DIR")" -czf "${BACKUP_SUBDIR}/arrconf.tgz" "$(basename "$ARRCONF_DIR")"
+  fi
   rm -rf "$ARRCONF_DIR"
   ok "Purged arrconf (backup at ${BACKUP_SUBDIR}/arrconf.tgz)"
 }

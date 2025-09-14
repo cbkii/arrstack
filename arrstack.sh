@@ -61,14 +61,21 @@ ALL_CONTAINERS="gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr j
 ALL_NATIVE_SERVICES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common"
 ALL_PACKAGES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common"
 
-# Critical host ports we may free up
-CRITICAL_PORTS="${QBT_HTTP_PORT_HOST} ${SONARR_PORT} ${RADARR_PORT} ${PROWLARR_PORT} ${BAZARR_PORT} ${FLARESOLVERR_PORT} ${GLUETUN_CONTROL_PORT}"
-
 # Runtime flags
 DRY_RUN="${DRY_RUN:-0}"
 DEBUG="${DEBUG:-0}"
 NO_COLOR="${NO_COLOR:-0}"
 VPN_MODE="${DEFAULT_VPN_MODE}"
+
+# Source optional user overrides
+USER_CONF="${ARRCONF_DIR}/userconf.sh"
+if [[ -f "${USER_CONF}" ]]; then
+  # shellcheck source=/dev/null
+  . "${USER_CONF}"
+fi
+
+# Critical host ports we may free up (recomputed after overrides)
+CRITICAL_PORTS="${CRITICAL_PORTS:-${QBT_HTTP_PORT_HOST} ${SONARR_PORT} ${RADARR_PORT} ${PROWLARR_PORT} ${BAZARR_PORT} ${FLARESOLVERR_PORT} ${GLUETUN_CONTROL_PORT}}"
 
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR LEGACY_VPNCONFS_DIR ARRCONF_DIR
