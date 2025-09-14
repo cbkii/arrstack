@@ -10,6 +10,7 @@ set -euo pipefail
 # to the installer-defined backup tree before removal.
 # ------------------------------------------------------------
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USER_NAME="${USER:-$(id -un)}"
 ARR_BASE="/home/${USER_NAME}/srv"
 ARR_DOCKER_DIR="${ARR_BASE}/docker"
@@ -17,6 +18,8 @@ ARR_STACK_DIRS=("${ARR_BASE}/arrstack" "${ARR_BASE}/arr-stack")
 ARR_BACKUP_DIR="${ARR_BASE}/backups"
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_SUBDIR="${ARR_BACKUP_DIR}/uninstall-${TS}"
+ARRCONF_DIR="${REPO_ROOT}/arrconf"
+PURGE_ARRCONF=0 # set 1 to remove arrconf secrets
 
 QBT_HTTP_PORT_HOST="${QBT_HTTP_PORT_HOST:-8080}"
 GLUETUN_CONTROL_PORT="${GLUETUN_CONTROL_PORT:-8000}"
@@ -191,12 +194,27 @@ remove_files() {
   ok "File cleanup complete"
 }
 
+purge_arrconf() {
+  [[ "$PURGE_ARRCONF" -eq 1 ]] || return 0
+  [[ -d "$ARRCONF_DIR" ]] || return 0
+  read -r -p "Purge arrconf (secrets) directory? (y/N) " ans
+  [[ $ans =~ ^[Yy]$ ]] || { note "Kept ${ARRCONF_DIR}"; return 0; }
+  mkdir -p "${BACKUP_SUBDIR}"
+  tar -C "$(dirname "$ARRCONF_DIR")" -czf "${BACKUP_SUBDIR}/arrconf.tgz" "$(basename "$ARRCONF_DIR")"
+  rm -rf "$ARRCONF_DIR"
+  ok "Purged arrconf (backup at ${BACKUP_SUBDIR}/arrconf.tgz)"
+}
+
 main() {
+  for a in "$@"; do
+    [[ $a == "--purge-arrconf" ]] && PURGE_ARRCONF=1
+  done
   confirm
   backup_all
   stop_stack
   remove_native
   remove_files
+  purge_arrconf
   step "Done. Backups stored at ${BACKUP_SUBDIR}"
 }
 

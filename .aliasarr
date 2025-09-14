@@ -15,6 +15,8 @@ ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-$ARR_BASE/docker}"
 ARR_BACKUP_DIR="${ARR_BACKUP_DIR:-$ARR_BASE/backups}"
 ARR_ENV_FILE="${ARR_ENV_FILE:-$ARR_STACK_DIR/.env}"
 ARR_DC="docker compose --env-file \"$ARR_ENV_FILE\" -f \"$ARR_STACK_DIR/docker-compose.yml\""
+ARRCONF_DIR="${ARRCONF_DIR:-$ARR_STACK_DIR/arrconf}"
+PROTON_AUTH_FILE="${PROTON_AUTH_FILE:-$ARRCONF_DIR/proton.auth}"
 
 # LAN IP for service bindings
 LAN_IP="${LAN_IP:-192.168.1.50}"
@@ -93,7 +95,7 @@ arr.open()     {
 pvpn() {
   local cmd="${1:-}"; shift || true
   local stack_dir="$ARR_STACK_DIR"; local env_file="$ARR_ENV_FILE"
-  local creds_file="${PROTON_CREDS_FILE:-$ARR_DOCKER_DIR/gluetun/proton-credentials.conf}"
+  local creds_file="$PROTON_AUTH_FILE"
   _set(){ local k="$1" v="$2"; sed -i "/^${k}=/d" "$env_file" 2>/dev/null; [[ -n "$v" ]] && echo "${k}=${v}" >>"$env_file"; case "$k" in VPN_MODE) VPN_MODE="$v";; GLUETUN_API_KEY) GLUETUN_API_KEY="$v";; GLUETUN_CONTROL_PORT) GLUETUN_CONTROL_PORT="$v";; QBT_HTTP_PORT_HOST) QBT_HTTP_PORT_HOST="$v";; QBT_USER) QBT_USER="$v";; QBT_PASS) QBT_PASS="$v";; esac }
   _restart(){ ( cd "$stack_dir" && docker compose --env-file "$env_file" restart gluetun ); }
   local auth="-u gluetun:${GLUETUN_API_KEY}"
@@ -114,9 +116,9 @@ pvpn() {
       sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "$creds_file" 2>/dev/null || true
       echo "PROTON_USER=${user}" >>"$creds_file"
       echo "PROTON_PASS=${pass}" >>"$creds_file"
-      sed -i '/^OPENVPN_USER=/d' "$env_file" 2>/dev/null || true
+      sed -i '/^OPENVPN_USER=/d;/^OPENVPN_PASSWORD=/d' "$env_file" 2>/dev/null || true
       echo "OPENVPN_USER=${user}+pmp" >>"$env_file"
-      echo "PROTON_PASS=${pass}" >>"$env_file"
+      echo "OPENVPN_PASSWORD=${pass}" >>"$env_file"
       echo "Updated creds. Restarting gluetun…"
       _restart;;
     s|status)
@@ -134,12 +136,17 @@ pvpn() {
       else
         curl -fsS "$auth" "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/wireguard/portforwarded"
       fi;;
+    paths|path|where)
+      echo "Proton auth: $creds_file"
+      echo "WireGuard configs: $ARRCONF_DIR/wg*.conf"
+      ;;
     *) cat <<USAGE
 pvpn commands:
   connect|c        Start gluetun + qbittorrent
   reconnect|r      Restart gluetun
   mode <ovpn|wg>   Switch VPN mode (ovpn recommended for PF)
   creds            Update Proton username/password (adds +pmp)
+  paths            Show expected credential locations
   status|s         Show container, public IP, forwarded port
   port             Print forwarded port only
 USAGE
