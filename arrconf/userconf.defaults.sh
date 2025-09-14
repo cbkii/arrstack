@@ -10,6 +10,7 @@ ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-${ARR_BASE}/docker}"
 ARR_STACK_DIR="${ARR_STACK_DIR:-${ARR_BASE}/arrstack}"
 ARR_BACKUP_DIR="${ARR_BACKUP_DIR:-${ARR_BASE}/backups}"
 ARRCONF_DIR="${ARRCONF_DIR:-${REPO_ROOT}/arrconf}"
+ARR_ENV_FILE="${ARR_ENV_FILE:-${ARR_STACK_DIR}/.env}"
 
 # Legacy secrets paths (for backward compatibility)
 LEGACY_VPNCONFS_DIR="${LEGACY_VPNCONFS_DIR:-${ARR_BASE}/wg-configs}"

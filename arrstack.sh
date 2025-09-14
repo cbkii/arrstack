@@ -32,8 +32,11 @@ esac
 # Critical host ports we may free up (recomputed after overrides)
 CRITICAL_PORTS="${CRITICAL_PORTS:-${QBT_HTTP_PORT_HOST} ${SONARR_PORT} ${RADARR_PORT} ${PROWLARR_PORT} ${BAZARR_PORT} ${FLARESOLVERR_PORT} ${GLUETUN_CONTROL_PORT}}"
 
+# Ensure env file path
+ARR_ENV_FILE="${ARR_ENV_FILE:-${ARR_STACK_DIR}/.env}"
+
 # Export for compose templating
-export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR LEGACY_VPNCONFS_DIR ARRCONF_DIR
+export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_ENV_FILE LEGACY_VPNCONFS_DIR ARRCONF_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
@@ -192,10 +195,7 @@ compose_cmd() {
     run_opts+=(--spinner)
     shift
   fi
-  (
-    cd "${ARR_STACK_DIR}" 2>/dev/null || return 0
-    run_cmd "${run_opts[@]}" docker compose "$@"
-  )
+  run_cmd "${run_opts[@]}" docker compose --env-file "$ARR_ENV_FILE" -f "${ARR_STACK_DIR}/docker-compose.yml" "$@"
 }
 
 stop_stack_if_present() {
@@ -418,8 +418,8 @@ parse_wg_conf() {
 # ------------------------------[ GLUETUN AUTH ]--------------------------------
 make_gluetun_apikey() {
   step "9/15 Generating Gluetun API key"
-  if [[ -f "${ARR_STACK_DIR}/.env" ]]; then
-    GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || true)"
+  if [[ -f "${ARR_ENV_FILE}" ]]; then
+    GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_ENV_FILE}" | cut -d= -f2- || true)"
   fi
   if [[ -z "${GLUETUN_API_KEY}" ]]; then
     if run_cmd --spinner docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey; then
@@ -447,14 +447,15 @@ write_gluetun_auth() {
 # ------------------------------[ .ENV FILE ]-----------------------------------
 write_env() {
   step "11/15 Writing stack .env"
-  local envf="${ARR_STACK_DIR}/.env"
+  local envf="${ARR_ENV_FILE}"
   ensure_dir "${ARR_STACK_DIR}"
   local PU="" PP="" CN="${SERVER_COUNTRIES}"
   if [[ -f "${PROTON_AUTH_FILE}" ]]; then
     PU="$(grep -E '^PROTON_USER=' "${PROTON_AUTH_FILE}" | cut -d= -f2- | tr -d '"' || true)"
     PP="$(grep -E '^PROTON_PASS=' "${PROTON_AUTH_FILE}" | cut -d= -f2- | tr -d '"' || true)"
   fi
-  cat >"${envf}" <<EOF
+  local env_content
+  env_content=$(cat <<EOF
 # IDs & timezone
 PUID=${PUID}
 PGID=${PGID}
@@ -482,6 +483,7 @@ ARR_BASE=${ARR_BASE}
 ARR_STACK_DIR=${ARR_STACK_DIR}
 ARR_DOCKER_DIR=${ARR_DOCKER_DIR}
 ARR_BACKUP_DIR=${ARR_BACKUP_DIR}
+ARRCONF_DIR=${ARRCONF_DIR}
 MEDIA_DIR=${MEDIA_DIR}
 DOWNLOADS_DIR=${DOWNLOADS_DIR}
 COMPLETED_DIR=${COMPLETED_DIR}
@@ -496,21 +498,23 @@ SERVER_COUNTRIES=${CN}
 SERVER_CC_PRIORITY="${SERVER_CC_PRIORITY}"
 UPDATER_PERIOD=24h
 EOF
+  )
+  local proton_env="${ARRCONF_DIR}/proton.env"
   if [[ "${VPN_MODE}" = "openvpn" ]]; then
     [[ -n "${PU}" && -n "${PP}" ]] || die "Missing Proton credentials at ${PROTON_AUTH_FILE}"
     local OUSER
     OUSER="$(ensure_pmp "${PU}")"
-    {
-      echo "OPENVPN_USER=${OUSER}"
-      echo "OPENVPN_PASSWORD=${PP}"
-    } >>"${envf}"
-    atomic_write "${ARRCONF_DIR}/proton.env" "OPENVPN_USER=${OUSER}\nOPENVPN_PASSWORD=${PP}\n"
-    run_cmd chmod 600 "${ARRCONF_DIR}/proton.env"
+    env_content+="
+OPENVPN_USER=${OUSER}
+OPENVPN_PASSWORD=${PP}"
+    atomic_write "${proton_env}" "OPENVPN_USER=${OUSER}\nOPENVPN_PASSWORD=${PP}\n"
   else
-    {
-      echo "WIREGUARD_MTU=1320"
-    } >>"${envf}"
+    atomic_write "${proton_env}" "# Proton OpenVPN credentials (unused for WireGuard)\n"
+    env_content+="
+WIREGUARD_MTU=1320"
   fi
+  atomic_write "${envf}" "${env_content}\n"
+  run_cmd chmod 600 "${proton_env}"
   run_cmd chmod 600 "${envf}"
   ok "Wrote ${envf}"
 }
@@ -525,14 +529,14 @@ warn_lan_ip() {
 # Populate WireGuard variables from a Proton .conf and fail if malformed when VPN_MODE=wireguard
 seed_wireguard_from_conf() {
   local VM CONF K A D
-  VM="$(grep -E '^VPN_MODE=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
+  VM="$(grep -E '^VPN_MODE=' "${ARR_ENV_FILE}" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
   if [[ "$VM" = "wireguard" ]]; then
     CONF="$(find_wg_conf "proton.conf" 2>/dev/null)" || die "VPN_MODE=wireguard but no WireGuard .conf found in ${ARRCONF_DIR}, ${ARR_DOCKER_DIR}/gluetun or ${LEGACY_VPNCONFS_DIR}"
     read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null) || die "Malformed WireGuard config: $CONF"
-    sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
-    echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
-    [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${ARR_STACK_DIR}/.env"
-    [ -n "$D" ] && echo "VPN_DNS_ADDRESS=${D}" >>"${ARR_STACK_DIR}/.env"
+    sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_ENV_FILE}"
+    echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_ENV_FILE}"
+    [ -n "$A" ] && echo "WIREGUARD_ADDRESSES=${A}" >>"${ARR_ENV_FILE}"
+    [ -n "$D" ] && echo "VPN_DNS_ADDRESS=${D}" >>"${ARR_ENV_FILE}"
     ok "Seeded WG from $(basename "$CONF")"
   fi
 }
@@ -692,7 +696,7 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     env_file:
-      - ./arrconf/proton.env
+      - ${ARRCONF_DIR}/proton.env
     environment:
       - TZ=${TIMEZONE}
       - VPN_SERVICE_PROVIDER=protonvpn
@@ -896,7 +900,7 @@ YAML
 
 # ------------------------------[ STARTUP ]-------------------------------------
 validate_creds_or_die() {
-  local VM ENVF="${ARR_STACK_DIR}/.env"
+  local VM ENVF="${ARR_ENV_FILE}"
   VM="$(grep -E '^VPN_MODE=' "$ENVF" | cut -d= -f2- || echo openvpn)"
   if [[ "$VM" = openvpn ]]; then
     local OU OP
@@ -927,7 +931,7 @@ start_with_checks() {
   step "14/15 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
   local VM
-  VM="$(grep -E '^VPN_MODE=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
+  VM="$(grep -E '^VPN_MODE=' "${ARR_ENV_FILE}" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
   local MAX_RETRIES=5 RETRY=0
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
@@ -990,7 +994,7 @@ install_aliases() {
         printf '%s\n' "export ARR_STACK_DIR=\"$ARR_STACK_DIR\""
         printf '%s\n' "export ARR_DOCKER_DIR=\"$ARR_DOCKER_DIR\""
         printf '%s\n' "export ARR_BACKUP_DIR=\"$ARR_BACKUP_DIR\""
-        printf '%s\n' "export ARR_ENV_FILE=\"$ARR_STACK_DIR/.env\""
+        printf '%s\n' "export ARR_ENV_FILE=\"$ARR_ENV_FILE\""
         printf '%s\n' "export ARRCONF_DIR=\"$ARRCONF_DIR\""
         printf '%s\n' "export LAN_IP=\"$LAN_IP\""
         printf '%s\n' "$line"
