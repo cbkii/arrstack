@@ -56,20 +56,65 @@ else
   C_YELLOW=''
   C_BLUE=''
 fi
-step() { printf "${C_BLUE}${C_BOLD}✴️ %s${C_RESET}\n" "$1"; }
-note() { printf "${C_BLUE}➤ %s${C_RESET}\n" "$1"; }
-ok() { printf "${C_GREEN}✔ %s${C_RESET}\n" "$1"; }
-warn() { printf "${C_YELLOW}⚠ %s${C_RESET}\n" "$1"; }
-err() { printf "${C_RED}✖ %s${C_RESET}\n" "$1"; }
-die() {
-  err "$1"
-  exit 1
+
+ts() {
+  local now diff
+  now=$(date +%s)
+  diff=$((now - SCRIPT_START))
+  printf '%02d:%02d' $((diff/60)) $((diff%60))
 }
+
+out() {
+  printf "%b\n" "$1" >>"${LOG_FILE}"
+  printf "%b\n" "$1" >&3
+}
+
+step() { out "$(ts) ${C_BLUE}${C_BOLD}✴️ $1${C_RESET}"; }
+note() { out "$(ts) ${C_BLUE}➤ $1${C_RESET}"; }
+ok() { out "$(ts) ${C_GREEN}✔ $1${C_RESET}"; }
+warn() { out "$(ts) ${C_YELLOW}⚠ $1${C_RESET}"; }
+err() { out "$(ts) ${C_RED}✖ $1${C_RESET}"; }
+die() { err "$1"; exit 1; }
+
 # shellcheck disable=SC2015
-trace() { [ "$DEBUG" = "1" ] && printf "${C_DIM}[trace] %s${C_RESET}\n" "$1" || true; }
+trace() { [ "$DEBUG" = "1" ] && printf "[trace] %s\n" "$1" >>"${LOG_FILE}" || true; }
 is_dry() { [[ "$DRY_RUN" = "1" ]]; }
-# shellcheck disable=SC2294
-run_cmd() { if is_dry; then note "[DRY] $*"; else eval "$@"; fi; }
+
+show_spinner() {
+  local pid=$1 spin=$'|/-\\' i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r%s' "${spin:i++%4:1}" >&3
+    sleep 0.1
+  done
+  printf '\r\033[K' >&3
+}
+
+run_cmd() {
+  local spinner=0
+  if [[ "${1:-}" = '--spinner' ]]; then spinner=1; shift; fi
+  if is_dry; then
+    note "[DRY] $*"
+    return 0
+  fi
+  printf '+ %s\n' "$*" >>"${LOG_FILE}"
+  local status
+  set +e
+  if [[ $spinner -eq 1 ]]; then
+    eval "$@" &
+    local pid=$!
+    show_spinner "$pid"
+    wait "$pid"
+    status=$?
+  else
+    eval "$@"
+    status=$?
+  fi
+  set -e
+  if [[ $status -ne 0 ]]; then
+    warn "Command failed ($status): $*"
+  fi
+  return $status
+}
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -109,8 +154,8 @@ check_deps() {
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
   if ! command -v ss >/dev/null 2>&1; then
     note "Installing iproute2 for net utils"
-    run_cmd sudo apt-get update -y >/dev/null 2>&1
-    run_cmd sudo apt-get install -y iproute2 >/dev/null 2>&1 || true
+    run_cmd --spinner sudo apt-get update -y || true
+    run_cmd --spinner sudo apt-get install -y iproute2 || true
   fi
   ok "Docker & Compose OK"
 }
@@ -122,18 +167,20 @@ compose_cmd() { (
 ); }
 stop_stack_if_present() {
   step "2/15 Stopping any existing stack"
-  compose_cmd down >/dev/null 2>&1 || true
+  local cmd
+  cmd="cd \"${ARR_STACK_DIR}\" && docker compose down"
+  run_cmd --spinner "$cmd" || true
 }
 stop_named_containers() {
   note "Removing known containers"
   # shellcheck disable=SC2015
-  for c in ${ALL_CONTAINERS}; do docker ps -a --format '{{.Names}}' | grep -q "^${c}$" && run_cmd docker rm -f "$c" >/dev/null 2>&1 || true; done
+  for c in ${ALL_CONTAINERS}; do docker ps -a --format '{{.Names}}' | grep -q "^${c}$" && run_cmd docker rm -f "$c" || true; done
 }
 clear_port_conflicts() {
   note "Clearing port conflicts"
   for p in ${CRITICAL_PORTS}; do if sudo fuser "${p}/tcp" >/dev/null 2>&1; then
     warn "Killing process on :$p"
-    run_cmd sudo fuser -k "${p}/tcp" >/dev/null 2>&1 || true
+    run_cmd sudo fuser -k "${p}/tcp" || true
   fi; done
 }
 stop_native_services() {
@@ -141,9 +188,9 @@ stop_native_services() {
   for SVC in ${ALL_NATIVE_SERVICES}; do
     if systemctl list-units --all --type=service | grep -q "${SVC}.service"; then
       note "Stopping ${SVC}…"
-      run_cmd sudo systemctl stop "${SVC}" >/dev/null 2>&1 || true
-      run_cmd sudo systemctl disable "${SVC}" >/dev/null 2>&1 || true
-      run_cmd sudo systemctl mask "${SVC}" >/dev/null 2>&1 || true
+      run_cmd sudo systemctl stop "${SVC}" || true
+      run_cmd sudo systemctl disable "${SVC}" || true
+      run_cmd sudo systemctl mask "${SVC}" || true
     fi
   done
   run_cmd sudo systemctl daemon-reload || true
@@ -219,19 +266,19 @@ move_native_dirs() {
 }
 purge_native_packages() {
   step "6/15 Purging ALL native packages"
-  run_cmd sudo apt-get update -y >/dev/null 2>&1 || true
+  run_cmd --spinner sudo apt-get update -y || true
   for PKG in ${ALL_PACKAGES}; do if dpkg -l | grep -q "^ii.*${PKG}"; then
     note "Purging ${PKG}…"
-    run_cmd sudo apt-get purge -y "${PKG}" >/dev/null 2>&1 || true
+    run_cmd sudo apt-get purge -y "${PKG}" || true
   fi; done
-  run_cmd sudo apt-get autoremove -y >/dev/null 2>&1 || true
+  run_cmd --spinner sudo apt-get autoremove -y || true
   ok "Native packages purged"
 }
 final_docker_cleanup() {
   step "7/15 Final Docker cleanup pass"
   for CONTAINER in ${ALL_CONTAINERS}; do
     if docker ps -aq --filter "name=${CONTAINER}" | grep -q .; then
-      run_cmd docker rm -f "$(docker ps -aq --filter "name=${CONTAINER}")" >/dev/null 2>&1 || true
+      run_cmd docker rm -f "$(docker ps -aq --filter "name=${CONTAINER}")" || true
     else
       note "No leftover ${CONTAINER}"
     fi
@@ -258,7 +305,9 @@ harden_arrconf() {
     fi
   done
   shopt -u nullglob
-  [[ $changed -eq 1 ]] && warn "Tightened permissions in ${ARRCONF_DIR}"
+  if [[ $changed -eq 1 ]]; then
+    warn "Tightened permissions in ${ARRCONF_DIR}"
+  fi
 }
 
 ensure_proton_auth() {
@@ -266,11 +315,17 @@ ensure_proton_auth() {
   harden_arrconf
   if [[ ! -f "${PROTON_AUTH_FILE}" ]]; then
     if [[ -f "${LEGACY_CREDS_WG}" ]]; then
-      mv "${LEGACY_CREDS_WG}" "${PROTON_AUTH_FILE}"
-      warn "Migrated legacy creds from ${LEGACY_CREDS_WG}"
+      if run_cmd mv "${LEGACY_CREDS_WG}" "${PROTON_AUTH_FILE}"; then
+        warn "Migrated legacy creds from ${LEGACY_CREDS_WG}"
+      else
+        warn "Failed to migrate creds from ${LEGACY_CREDS_WG}"
+      fi
     elif [[ -f "${LEGACY_CREDS_DOCKER}" ]]; then
-      mv "${LEGACY_CREDS_DOCKER}" "${PROTON_AUTH_FILE}"
-      warn "Migrated legacy creds from ${LEGACY_CREDS_DOCKER}"
+      if run_cmd mv "${LEGACY_CREDS_DOCKER}" "${PROTON_AUTH_FILE}"; then
+        warn "Migrated legacy creds from ${LEGACY_CREDS_DOCKER}"
+      else
+        warn "Failed to migrate creds from ${LEGACY_CREDS_DOCKER}"
+      fi
     else
       atomic_write "${PROTON_AUTH_FILE}" "# Proton account credentials (do NOT include +pmp)\nPROTON_USER=\nPROTON_PASS=\n"
       warn "Created template ${PROTON_AUTH_FILE}; edit with your Proton credentials"
@@ -333,10 +388,11 @@ make_gluetun_apikey() {
     GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || true)"
   fi
   if [[ -z "${GLUETUN_API_KEY}" ]]; then
-    if docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey 2>/dev/null; then
+    if run_cmd --spinner docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey; then
       GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
     else
-      GLUETUN_API_KEY="$(openssl rand -base64 48)"
+      run_cmd --spinner openssl rand -base64 48 >/tmp/gl_apikey
+      GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
     fi
     rm -f /tmp/gl_apikey
     ok "API key generated"
@@ -752,7 +808,10 @@ validate_creds_or_die() {
 }
 pull_images() {
   step "13/15 Pulling images"
-  compose_cmd pull || warn "Pull failed; will rely on up"
+  local cmd="cd \"${ARR_STACK_DIR}\" && docker compose pull"
+  if ! run_cmd --spinner "$cmd"; then
+    warn "Pull failed; will rely on up"
+  fi
 }
 start_with_checks() {
   step "14/15 Starting the stack with enhanced health monitoring"
@@ -766,9 +825,9 @@ start_with_checks() {
     local waited=0 HEALTH="unknown" IP="" PF=""
     while [[ $waited -lt 180 ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
-      IP="$(docker exec gluetun wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip 2>/dev/null || true)"
+      IP="$(docker exec gluetun wget -qO- "http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" 2>/dev/null || true)"
       if [[ "$VM" = openvpn ]]; then
-        PF="$(docker exec gluetun wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"
+        PF="$(docker exec gluetun wget -qO- "http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" 2>/dev/null | grep -o '[0-9]\+' || true)"
         [[ "$HEALTH" = healthy && -n "$IP" && -n "$PF" && "$PF" -gt 1024 ]] && break
       else
         [[ "$HEALTH" = healthy && -n "$IP" ]] && break
@@ -795,11 +854,12 @@ start_with_checks() {
     ok "qBittorrent credentials preseeded"
   fi
   compose_cmd ps || true
-  note "Public IP:"
-  wget -qO- http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip || true
+  local ip pf
+  ip="$(wget -qO- "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" || true)"
+  note "Public IP: ${ip}"
   if [[ "$VM" = openvpn ]]; then
-    note "Forwarded port:"
-    wget -qO- http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded || true
+    pf="$(wget -qO- "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" || true)"
+    note "Forwarded port: ${pf}"
   fi
 }
 
@@ -808,7 +868,7 @@ install_aliases() {
   local src
   src="$(dirname "${BASH_SOURCE[0]}")/.aliasarr"
   local dst="${ARR_STACK_DIR}/.aliasarr"
-  run_cmd cp "$src" "$dst"
+  run_cmd cp "$src" "$dst" || warn "Failed to copy alias file"
   local shellrc="/home/${USER_NAME}/.zshrc"
   local line="[ -f \"$dst\" ] && source \"$dst\""
   if ! grep -Fq "$line" "$shellrc" 2>/dev/null; then
@@ -835,6 +895,7 @@ install_aliases() {
 # --------------------------------[ MAIN ]--------------------------------------
 main() {
   parse_args "$@"
+  SCRIPT_START=$(date +%s)
   step "0/15 ARR+VPN merged installer"
   check_deps
   stop_stack_if_present
@@ -859,23 +920,20 @@ main() {
   pull_images
   start_with_checks
   install_aliases
-  echo
+  echo >&3
   ok "Done. Next steps:"
-  echo "  • Edit ${PROTON_AUTH_FILE} (username WITHOUT +pmp) if you haven't already."
-  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
+  note "  • Edit ${PROTON_AUTH_FILE} (username WITHOUT +pmp) if you haven't already."
+  note "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
 }
 
 LOG_FILE="${ARR_STACK_DIR}/arrstack-install.log"
 mkdir -p "${ARR_STACK_DIR}"
 exec 3>&1 4>&2
-exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2)
-set -x
+exec 1>>"${LOG_FILE}" 2>&1
 cleanup() {
   local status=$?
-  set +x
   exec 1>&3 2>&4
-  echo "Detailed log saved to ${LOG_FILE} (last 1888 lines):"
-  tail -n 1888 "${LOG_FILE}"
+  echo "Log saved to ${LOG_FILE}" >&3
   exit "$status"
 }
 trap cleanup EXIT
