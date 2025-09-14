@@ -49,11 +49,12 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 2. **Review and customise configuration:**
 
-   * Open `arrstack.sh` and adjust the variables in the `USER CONFIG` section.
+   * Defaults live in the `USER CONFIG` section of `arrstack.sh`. To keep the installer clean, override any of these settings in `arrconf/userconf.sh` by uncommenting the lines you need; the file is sourced on every run so you can adjust it before the first install or later and rerun the script.
    * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
 
    ```bash
-   nano arrstack.sh             # edit configuration
+   nano arrconf/userconf.sh     # uncomment overrides
+   nano arrstack.sh             # view all defaults
    nano arrstack-uninstall.sh   # optional reset script
    ```
 
