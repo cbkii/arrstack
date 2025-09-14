@@ -156,10 +156,12 @@ atomic_write() {
 check_deps() {
   step "1/15 Checking prerequisites"
   [[ "$(whoami)" == "${USER_NAME}" ]] || die "Run as '${USER_NAME}' (current: $(whoami))"
-  for b in docker wget curl; do command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"; done
-  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
 
   local pkgs=()
+  command -v docker >/dev/null 2>&1 || pkgs+=(docker.io)
+  docker compose version >/dev/null 2>&1 || pkgs+=(docker-compose-plugin)
+  command -v wget >/dev/null 2>&1 || pkgs+=(wget)
+  command -v curl >/dev/null 2>&1 || pkgs+=(curl)
   command -v ss >/dev/null 2>&1 || pkgs+=(iproute2)
   command -v openssl >/dev/null 2>&1 || pkgs+=(openssl)
   command -v xxd >/dev/null 2>&1 || pkgs+=(xxd)
@@ -169,8 +171,11 @@ check_deps() {
     run_cmd --spinner sudo apt-get install -y "${pkgs[@]}" || true
   fi
 
-  for b in openssl xxd; do command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"; done
-  ok "Docker & Compose OK"
+  for b in docker wget curl ss openssl xxd; do
+    command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"
+  done
+  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
+  ok "All prerequisites installed"
 }
 
 # ----------------------------[ CLEANUP PHASE ]---------------------------------
@@ -552,7 +557,7 @@ CONFEOF
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1" >&2; return 1; }; }
 
 check_hash_deps() {
-  need openssl && need xxd && need base64 && need sed && need awk && need grep || return 1
+  need openssl && need base64 && need sed && need awk && need grep || return 1
   if ! openssl version | grep -qE 'OpenSSL 3\.'; then
     echo "OpenSSL 3 required (found: $(openssl version))" >&2; return 1
   fi
@@ -567,13 +572,17 @@ derive_qbt_hash() {
   : "${QBT_USER:?QBT_USER not set}" "${QBT_PASS:?QBT_PASS not set}"
   local salt_hex dk_b64 salt_b64
   salt_hex="$(openssl rand -hex 16)"
-  dk_b64="$(openssl kdf -binary -keylen 64 PBKDF2 \
+  dk_b64="$(openssl kdf -binary -keylen 64 \
               -kdfopt digest:SHA512 \
               -kdfopt pass:"${QBT_PASS}" \
               -kdfopt hexsalt:"${salt_hex}" \
               -kdfopt iter:100000 \
-            | base64 | tr -d '\n')"
-  salt_b64="$(printf '%s' "${salt_hex}" | xxd -r -p | base64 | tr -d '\n')"
+            PBKDF2 | base64 | tr -d '\n')"
+  if command -v xxd >/dev/null 2>&1; then
+    salt_b64="$(printf '%s' "${salt_hex}" | xxd -r -p | base64 | tr -d '\n')"
+  else
+    salt_b64="$(printf "%b" "$(printf '%s' "${salt_hex}" | sed 's/../\\x&/g')" | base64 | tr -d '\n')"
+  fi
   export SALT_B64="${salt_b64}" DK_B64="${dk_b64}"
 }
 
