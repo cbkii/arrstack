@@ -18,6 +18,7 @@
 # LAN_IP="192.168.1.50" # set to your host's LAN IP
 # GLUETUN_CONTROL_PORT="8000" # Gluetun control server port
 # GLUETUN_CONTROL_HOST="127.0.0.1" # Host used for Gluetun control server checks
+# GLUETUN_HEALTH_TARGET="1.1.1.1:443" # Health check address for Gluetun
 
 # Media/Downloads layout
 # MEDIA_DIR="/media/mediasmb"
@@ -31,7 +32,7 @@
 # QBT_WEBUI_PORT="8080"     # qBittorrent WebUI port inside container
 # QBT_HTTP_PORT_HOST="8080" # host port mapped to qBittorrent
 # QBT_USER=""
-# QBT_PASS=""
+# QBT_PASS="" # plain text; requires OpenSSL 3 or will be ignored
 # GLUETUN_API_KEY=""
 
 # Service ports (host:container)

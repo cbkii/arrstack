@@ -31,6 +31,8 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
   sudo systemctl enable --now docker
   ```
 
+> Pre-seeding qBittorrent credentials requires **OpenSSL 3** (Ubuntu 22.04+ ships it). If only an older OpenSSL is found, the installer falls back to qBittorrent's temporary password. Setting `QBT_USER`/`QBT_PASS` is optional.
+
 ---
 
 ## Quick start
@@ -50,7 +52,8 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 2. **Review and customise configuration:**
 
    * Defaults live in the `USER CONFIG` section of `arrstack.sh`. To keep the installer clean, override any of these settings in `arrconf/userconf.sh` by uncommenting the lines you need; the file is sourced on every run so you can adjust it before the first install or later and rerun the script.
-   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
+  * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
+    * Set `QBT_PASS` in **plain text** – the installer hashes it with PBKDF2 (via OpenSSL 3) before writing `qBittorrent.conf`. If OpenSSL 3 isn't available, the script warns and ignores these values.
 
    ```bash
    nano arrconf/userconf.sh     # uncomment overrides
@@ -75,18 +78,24 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
-     * **qBittorrent:** `http://<LAN_IP>:8080` – installer prints an initial password; set `${QBT_USER}/${QBT_PASS}` before installation to preseed.
-     * **Sonarr:** `http://<LAN_IP>:8989`
-     * **Radarr:** `http://<LAN_IP>:7878`
-     * **Prowlarr:** `http://<LAN_IP>:9696`
-     * **Bazarr:** `http://<LAN_IP>:6767`
-     * **Gluetun API:** `http://<LAN_IP>:8000` (Basic auth user `gluetun`, password from `.env` `GLUETUN_API_KEY`)
+    * **qBittorrent:** `http://${LAN_IP}:${QBT_HTTP_PORT_HOST}`
+      * If `${QBT_USER}` and `${QBT_PASS}` (plain text) are set and OpenSSL 3 is available, the script hashes the password and you can log in with those credentials.
+      * Otherwise (or if OpenSSL 3 is missing) the installer prints a temporary admin password from the logs; log in as `admin/<printed>` and change it in qBittorrent.
+     * **Sonarr:** `http://${LAN_IP}:${SONARR_PORT}`
+     * **Radarr:** `http://${LAN_IP}:${RADARR_PORT}`
+     * **Prowlarr:** `http://${LAN_IP}:${PROWLARR_PORT}`
+     * **Bazarr:** `http://${LAN_IP}:${BAZARR_PORT}`
+     * **Gluetun API:** `http://${LAN_IP}:${GLUETUN_CONTROL_PORT}` (Basic auth user `gluetun`, password from `.env` `GLUETUN_API_KEY`)
 
     > All UIs are exposed via the Gluetun service and bound to `LAN_IP`. Set `LAN_IP` at the top of `arrstack.sh` (e.g. `${GLUETUN_CONTROL_HOST}` for local-only or another LAN address to expose to your network). If you set `LAN_IP=0.0.0.0` to expose beyond your LAN, front the Gluetun control server with TLS and a strong auth proxy.
 
-     > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
+     > The WebUI is bound to `${LAN_IP}:${QBT_HTTP_PORT_HOST}`. Set `LAN_IP=${GLUETUN_CONTROL_HOST}` for host-only access or your host's LAN address to reach it from the network.
 
-     > Tip: After you log in, change the generated password. UPnP/NAT-PMP is disabled automatically.
+     > Only `${GLUETUN_CONTROL_HOST}` (Gluetun's loopback) can access the API without a login (`WebUI\BypassLocalAuth=true`) so the port-forward hook works; browsers on the LAN still require a password.
+
+    > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
+
+    > Tip: After you log in, change the generated password. UPnP/NAT-PMP is disabled automatically.
 
 ---
 
