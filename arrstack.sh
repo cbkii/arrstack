@@ -200,7 +200,11 @@ compose_cmd() {
 
 stop_stack_if_present() {
   step "2/15 Stopping any existing stack"
-  compose_cmd --spinner down || true
+  if [[ -f "${ARR_STACK_DIR}/docker-compose.yml" && -f "${ARR_ENV_FILE}" ]]; then
+    compose_cmd --spinner down || true
+  else
+    note "No existing stack to stop"
+  fi
 }
 stop_named_containers() {
   note "Removing known containers"
