@@ -498,10 +498,14 @@ UPDATER_PERIOD=24h
 EOF
   if [[ "${VPN_MODE}" = "openvpn" ]]; then
     [[ -n "${PU}" && -n "${PP}" ]] || die "Missing Proton credentials at ${PROTON_AUTH_FILE}"
+    local OUSER
+    OUSER="$(ensure_pmp "${PU}")"
     {
-      echo "OPENVPN_USER=$(ensure_pmp "${PU}")"
+      echo "OPENVPN_USER=${OUSER}"
       echo "OPENVPN_PASSWORD=${PP}"
     } >>"${envf}"
+    atomic_write "${ARRCONF_DIR}/proton.env" "OPENVPN_USER=${OUSER}\nOPENVPN_PASSWORD=${PP}\n"
+    run_cmd chmod 600 "${ARRCONF_DIR}/proton.env"
   else
     {
       echo "WIREGUARD_MTU=1320"
@@ -687,17 +691,14 @@ services:
     cap_add: ["NET_ADMIN"]
     devices:
       - /dev/net/tun:/dev/net/tun
+    env_file:
+      - ./arrconf/proton.env
     environment:
       - TZ=${TIMEZONE}
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=${VPN_TYPE}
 YAML
-    if [ "${VPN_MODE}" = "openvpn" ]; then
-      cat <<'YAML'
-      - OPENVPN_USER=${OPENVPN_USER}
-      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD}
-YAML
-    else
+    if [ "${VPN_MODE}" = "wireguard" ]; then
       cat <<'YAML'
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
       - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
@@ -716,7 +717,7 @@ YAML
       - UPDATER_PERIOD=${UPDATER_PERIOD}
       - HEALTH_TARGET_ADDRESS=${GLUETUN_HEALTH_TARGET}
       # Control server (RBAC)
-      - HTTP_CONTROL_SERVER_ADDRESS=${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}
+      - "HTTP_CONTROL_SERVER_ADDRESS=${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
       - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c '\
@@ -774,7 +775,7 @@ YAML
     restart: unless-stopped
 
   sonarr:
-    image: ghcr.io/hotio/sonarr:release
+    image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
     network_mode: "service:gluetun"
     environment:
@@ -800,7 +801,7 @@ YAML
     restart: unless-stopped
 
   radarr:
-    image: ghcr.io/hotio/radarr:release
+    image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
     network_mode: "service:gluetun"
     environment:
@@ -909,6 +910,10 @@ validate_creds_or_die() {
       warn "Fixing OPENVPN_USER to include +pmp"
       sed -i '/^OPENVPN_USER=/d' "$ENVF"
       echo "OPENVPN_USER=$(ensure_pmp "$OU")" >>"$ENVF"
+      if [[ -f "${ARRCONF_DIR}/proton.env" ]]; then
+        sed -i '/^OPENVPN_USER=/d' "${ARRCONF_DIR}/proton.env"
+        echo "OPENVPN_USER=$(ensure_pmp "$OU")" >>"${ARRCONF_DIR}/proton.env"
+      fi
     fi
   fi
 }
