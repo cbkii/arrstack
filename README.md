@@ -127,6 +127,7 @@ git commit -m "Ignore userconf.sh; load defaults then overrides"
 
 * Base: `~/srv`
 * Compose & `.env`: `~/srv/arrstack`
+  * `docker compose` explicitly uses this file via `--env-file` (`ARR_ENV_FILE`)
 * App data: `~/srv/docker/<service>`
 * Downloads: `~/Downloads` → mounted in qB as `/downloads`
 * Completed: `~/Downloads/completed` → `/completed`
