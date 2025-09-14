@@ -15,6 +15,7 @@ ARR_VPNCONFS_DIR="${ARR_BASE}/wg-configs" # Put Proton files (.conf, etc.) here
 # Local IP for binding services
 LAN_IP="192.168.1.50" # set to your host's LAN IP
 GLUETUN_CONTROL_PORT="8000" # Gluetun control server port
+GLUETUN_CONTROL_HOST="127.0.0.1" # Host used for Gluetun control server checks
 
 # Media/Downloads layout
 MEDIA_DIR="/media/mediasmb"
@@ -25,8 +26,8 @@ TV_DIR="${MEDIA_DIR}/Shows"
 SUBS_DIR="${MEDIA_DIR}/subs"
 
 # qBittorrent UI credentials/ports
-QBT_HTTP_PORT="8080"       # qBittorrent WebUI port inside container
-QBT_HTTP_PORT_HOST="8080"  # host port mapped to qBittorrent
+QBT_WEBUI_PORT="8080"     # qBittorrent WebUI port inside container
+QBT_HTTP_PORT_HOST="8080" # host port mapped to qBittorrent
 QBT_USER=""
 QBT_PASS=""
 
@@ -67,7 +68,7 @@ VPN_MODE="${DEFAULT_VPN_MODE}"
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_VPNCONFS_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
-export QBT_HTTP_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP GLUETUN_CONTROL_PORT PUID PGID TIMEZONE
+export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST PUID PGID TIMEZONE
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK GLUETUN_API_KEY
 
@@ -381,8 +382,9 @@ GLUETUN_API_KEY=${GLUETUN_API_KEY}
 
 # Network and qBittorrent
 GLUETUN_CONTROL_PORT=${GLUETUN_CONTROL_PORT}
-QBT_HTTP_PORT=${QBT_HTTP_PORT}
 QBT_HTTP_PORT_HOST=${QBT_HTTP_PORT_HOST}
+QBT_WEBUI_PORT=${QBT_WEBUI_PORT}
+GLUETUN_CONTROL_HOST=${GLUETUN_CONTROL_HOST}
 QBT_USER=${QBT_USER}
 QBT_PASS=${QBT_PASS}
 LAN_IP=${LAN_IP}
@@ -519,7 +521,7 @@ YAML
       - HTTP_CONTROL_SERVER_ADDRESS=:${GLUETUN_CONTROL_PORT}
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
-      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}},\"use_upnp\":false,\"use_natpmp\":false}" http://127.0.0.1:${QBT_HTTP_PORT}/api/v2/app/setPreferences'
+      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}},\"use_upnp\":false,\"use_natpmp\":false}" http://${GLUETUN_CONTROL_HOST}:${QBT_WEBUI_PORT}/api/v2/app/setPreferences'
       - PUID=${PUID}
       - PGID=${PGID}
     volumes:
@@ -527,14 +529,14 @@ YAML
       - ${ARR_DOCKER_DIR}/gluetun/auth:/gluetun/auth
     ports:
       - "${LAN_IP}:${GLUETUN_CONTROL_PORT}:${GLUETUN_CONTROL_PORT}"          # Gluetun control API (LAN-only)
-      - "${LAN_IP}:${QBT_HTTP_PORT_HOST}:${QBT_HTTP_PORT}"   # qB WebUI via gluetun namespace
+      - "${LAN_IP}:${QBT_HTTP_PORT_HOST}:${QBT_WEBUI_PORT}"   # qB WebUI via gluetun namespace
       - "${LAN_IP}:${SONARR_PORT}:${SONARR_PORT}"                    # Sonarr
       - "${LAN_IP}:${RADARR_PORT}:${RADARR_PORT}"                    # Radarr
       - "${LAN_IP}:${PROWLARR_PORT}:${PROWLARR_PORT}"                    # Prowlarr
       - "${LAN_IP}:${BAZARR_PORT}:${BAZARR_PORT}"                    # Bazarr
       - "${LAN_IP}:${FLARESOLVERR_PORT}:${FLARESOLVERR_PORT}"                    # FlareSolverr
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${GLUETUN_CONTROL_PORT}/v1/publicip/ip >/dev/null && wget -qO- http://localhost:${GLUETUN_CONTROL_PORT}/v1/${VPN_TYPE}/status | grep -q 'status.:.running'"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip >/dev/null && wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/${VPN_TYPE}/status | grep -q 'status.:.running'"]
       interval: 45s
       timeout: 10s
       retries: 5
@@ -546,7 +548,7 @@ YAML
     container_name: qbittorrent
     network_mode: "service:gluetun"
     environment:
-      - WEBUI_PORT=${QBT_HTTP_PORT}
+      - WEBUI_PORT=${QBT_WEBUI_PORT}
       - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
       - PUID=${PUID}
       - PGID=${PGID}
@@ -561,7 +563,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${QBT_HTTP_PORT}/api/v2/app/version >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -587,7 +589,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${SONARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${SONARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -613,7 +615,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${RADARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${RADARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -634,7 +636,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${PROWLARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${PROWLARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -660,7 +662,7 @@ YAML
       radarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${BAZARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${BAZARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -677,7 +679,7 @@ YAML
       prowlarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${FLARESOLVERR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${FLARESOLVERR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -725,9 +727,9 @@ start_with_checks() {
     local waited=0 HEALTH="unknown" IP="" PF=""
     while [[ $waited -lt 180 ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
-      IP="$(docker exec gluetun wget -qO- http://localhost:${GLUETUN_CONTROL_PORT}/v1/publicip/ip 2>/dev/null || true)"
+      IP="$(docker exec gluetun wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip 2>/dev/null || true)"
       if [[ "$VM" = openvpn ]]; then
-        PF="$(docker exec gluetun wget -qO- http://localhost:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"
+        PF="$(docker exec gluetun wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded 2>/dev/null | grep -o '[0-9]\+' || true)"
         [[ "$HEALTH" = healthy && -n "$IP" && -n "$PF" && "$PF" -gt 1024 ]] && break
       else
         [[ "$HEALTH" = healthy && -n "$IP" ]] && break
