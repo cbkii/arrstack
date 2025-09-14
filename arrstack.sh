@@ -710,14 +710,14 @@ YAML
       - VPN_PORT_FORWARDING=on
       # - VPN_PORT_FORWARDING_PROVIDER=protonvpn
       - PORT_FORWARD_ONLY=on
-      - "SERVER_COUNTRIES=${SERVER_COUNTRIES}"
+      - SERVER_COUNTRIES="${SERVER_COUNTRIES}"
       # - FREE_ONLY=off
       # DNS & stability
       - DOT=off
       - UPDATER_PERIOD=${UPDATER_PERIOD}
       - HEALTH_TARGET_ADDRESS=${GLUETUN_HEALTH_TARGET}
       # Control server (RBAC)
-      - "HTTP_CONTROL_SERVER_ADDRESS=${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
+      - HTTP_CONTROL_SERVER_ADDRESS="${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
       - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c '\
@@ -725,7 +725,7 @@ YAML
             wget -qO- --timeout=2 http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/version && break || sleep 1; \
           done; \
           wget -qO- --timeout=5 \
-            --header="Referer: http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/" \
+            --referer="http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/" \
             --post-data "json={\"listen_port\":{{PORTS}},\"use_upnp\":false,\"use_natpmp\":false}" \
             http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences >/dev/null 2>&1 || exit 0'
       - PUID=${PUID}
@@ -909,10 +909,10 @@ validate_creds_or_die() {
     if [[ "$OU" != *+pmp ]]; then
       warn "Fixing OPENVPN_USER to include +pmp"
       sed -i '/^OPENVPN_USER=/d' "$ENVF"
-      echo "OPENVPN_USER=$(ensure_pmp "$OU")" >>"$ENVF"
+      printf 'OPENVPN_USER=%s\n' "$(ensure_pmp "$OU")" >>"$ENVF"
       if [[ -f "${ARRCONF_DIR}/proton.env" ]]; then
         sed -i '/^OPENVPN_USER=/d' "${ARRCONF_DIR}/proton.env"
-        echo "OPENVPN_USER=$(ensure_pmp "$OU")" >>"${ARRCONF_DIR}/proton.env"
+        printf 'OPENVPN_USER=%s\n' "$(ensure_pmp "$OU")" >>"${ARRCONF_DIR}/proton.env"
       fi
     fi
   fi
