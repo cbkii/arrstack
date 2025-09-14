@@ -554,11 +554,12 @@ CONFEOF
     fi
     local salt_hex salt_b64 dk_b64 hash_line
     salt_hex=$(openssl rand -hex 16)
-    dk_b64=$(openssl kdf -binary -keylen 64 PBKDF2 \
+    dk_b64=$(openssl kdf -binary -keylen 64 \
       -kdfopt digest:SHA512 \
       -kdfopt pass:"${QBT_PASS}" \
       -kdfopt hexsalt:"${salt_hex}" \
-      -kdfopt iter:100000 | base64 -w0)
+      -kdfopt iter:100000 \
+      PBKDF2 | base64 -w0)
     salt_b64=$(printf "%s" "${salt_hex}" | xxd -r -p | base64 -w0)
     hash_line="WebUI\\Password_PBKDF2=\"@ByteArray(${salt_b64}:${dk_b64})\""
     sed -i '/^WebUI\\Password_PBKDF2=/d' "${conf}"
