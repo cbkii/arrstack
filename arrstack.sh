@@ -504,7 +504,7 @@ EOF
 # Warn if LAN_IP is 0.0.0.0 which exposes services on all interfaces
 warn_lan_ip() {
   if [ "${LAN_IP}" = "0.0.0.0" ]; then
-    echo "WARNING: LAN_IP is set to 0.0.0.0 — this would expose the Gluetun API publicly. Set LAN_IP to your LAN interface IP (e.g. 192.168.1.10) for LAN-only access." >&2
+    warn "LAN_IP is set to 0.0.0.0 — this would expose the Gluetun API publicly. Set LAN_IP to your LAN interface IP (e.g. 192.168.1.10) for LAN-only access."
   fi
 }
 
@@ -1015,16 +1015,18 @@ main() {
   note "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
 }
 
-LOG_FILE="${ARR_STACK_DIR}/arrstack-install.log"
-mkdir -p "${ARR_STACK_DIR}"
-exec 3>&1 4>&2
-exec 1>>"${LOG_FILE}" 2>&1
-cleanup() {
-  local status=$?
-  exec 1>&3 2>&4
-  echo "Log saved to ${LOG_FILE}" >&3
-  exit "$status"
-}
-trap cleanup EXIT
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  LOG_FILE="${ARR_STACK_DIR}/arrstack-install.log"
+  mkdir -p "${ARR_STACK_DIR}"
+  exec 3>&1 4>&2
+  exec 1>>"${LOG_FILE}" 2>&1
+  cleanup() {
+    local status=$?
+    exec 1>&3 2>&4
+    echo "Log saved to ${LOG_FILE}" >&3
+    exit "$status"
+  }
+  trap cleanup EXIT
 
-main "$@"
+  main "$@"
+fi
