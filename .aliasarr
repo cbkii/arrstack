@@ -14,7 +14,7 @@ ARR_STACK_DIR="${ARR_STACK_DIR:-$ARR_BASE/arr-stack}"
 ARR_DOCKER_DIR="${ARR_DOCKER_DIR:-$ARR_BASE/docker}"
 ARR_BACKUP_DIR="${ARR_BACKUP_DIR:-$ARR_BASE/backups}"
 ARR_ENV_FILE="${ARR_ENV_FILE:-$ARR_STACK_DIR/.env}"
-ARR_DC="docker compose --env-file \"$ARR_ENV_FILE\" -f \"$ARR_STACK_DIR/docker-compose.yml\""
+ARR_DC=(docker compose --env-file "$ARR_ENV_FILE" -f "$ARR_STACK_DIR/docker-compose.yml")
 ARRCONF_DIR="${ARRCONF_DIR:-$ARR_STACK_DIR/arrconf}"
 PROTON_AUTH_FILE="${PROTON_AUTH_FILE:-$ARRCONF_DIR/proton.auth}"
 
@@ -23,7 +23,7 @@ LAN_IP="${LAN_IP:-192.168.1.50}"
 
 # ----------------[ Utilities ]-----------------
 _arr_exists() { docker ps -a --format '{{.Names}}' | grep -qx "$1"; }
-_arr_dc()     { ( cd "$ARR_STACK_DIR" && eval "$ARR_DC $*" ); }
+_arr_dc()     { ( cd "$ARR_STACK_DIR" && "${ARR_DC[@]}" "$@" ); }
 _arr_get()    { grep -E "^$1=" "$ARR_ENV_FILE" 2>/dev/null | sed 's/^[^=]*=//' | tr -d '"' ; }
 _arr_url()    { printf "http://%s:%s" "${1:-${LAN_IP}}" "${2:?port}"; }
 _arr_now()    { date +%Y%m%d-%H%M%S; }

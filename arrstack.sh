@@ -42,7 +42,6 @@ export DEFAULT_VPN_MODE SERVER_COUNTRIES SERVER_CC_PRIORITY DEFAULT_COUNTRY GLUE
 if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
   C_RESET='\033[0m'
   C_BOLD='\033[1m'
-  C_DIM='\033[2m'
   C_RED='\033[31m'
   C_GREEN='\033[32m'
   C_YELLOW='\033[33m'
@@ -50,7 +49,6 @@ if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
 else
   C_RESET=''
   C_BOLD=''
-  C_DIM=''
   C_RED=''
   C_GREEN=''
   C_YELLOW=''
@@ -91,27 +89,35 @@ show_spinner() {
 
 run_cmd() {
   local spinner=0
-  if [[ "${1:-}" = '--spinner' ]]; then spinner=1; shift; fi
+  if [[ "${1:-}" = '--spinner' ]]; then
+    spinner=1
+    shift
+  fi
+
+  # Preserve arguments to avoid word splitting/globbing
+  local -a cmd=("$@")
   if is_dry; then
-    note "[DRY] $*"
+    note "[DRY] $(printf '%q ' "${cmd[@]}")"
     return 0
   fi
-  printf '+ %s\n' "$*" >>"${LOG_FILE}"
+
+  { printf '+ ' ; printf '%q ' "${cmd[@]}" ; printf '\n'; } >>"${LOG_FILE}"
+
   local status
   set +e
   if [[ $spinner -eq 1 ]]; then
-    eval "$@" &
+    "${cmd[@]}" &
     local pid=$!
     show_spinner "$pid"
     wait "$pid"
     status=$?
   else
-    eval "$@"
+    "${cmd[@]}"
     status=$?
   fi
   set -e
   if [[ $status -ne 0 ]]; then
-    warn "Command failed ($status): $*"
+    warn "Command failed ($status): $(printf '%q ' "${cmd[@]}")"
   fi
   return $status
 }
@@ -161,15 +167,21 @@ check_deps() {
 }
 
 # ----------------------------[ CLEANUP PHASE ]---------------------------------
-compose_cmd() { (
-  cd "${ARR_STACK_DIR}" 2>/dev/null || return 0
-  run_cmd docker compose "$@"
-); }
+compose_cmd() {
+  local run_opts=()
+  if [[ ${1:-} == '--spinner' ]]; then
+    run_opts+=(--spinner)
+    shift
+  fi
+  (
+    cd "${ARR_STACK_DIR}" 2>/dev/null || return 0
+    run_cmd "${run_opts[@]}" docker compose "$@"
+  )
+}
+
 stop_stack_if_present() {
   step "2/15 Stopping any existing stack"
-  local cmd
-  cmd="cd \"${ARR_STACK_DIR}\" && docker compose down"
-  run_cmd --spinner "$cmd" || true
+  compose_cmd --spinner down || true
 }
 stop_named_containers() {
   note "Removing known containers"
@@ -808,8 +820,7 @@ validate_creds_or_die() {
 }
 pull_images() {
   step "13/15 Pulling images"
-  local cmd="cd \"${ARR_STACK_DIR}\" && docker compose pull"
-  if ! run_cmd --spinner "$cmd"; then
+  if ! compose_cmd --spinner pull; then
     warn "Pull failed; will rely on up"
   fi
 }
