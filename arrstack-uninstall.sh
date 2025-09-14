@@ -18,10 +18,19 @@ ARR_BACKUP_DIR="${ARR_BASE}/backups"
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_SUBDIR="${ARR_BACKUP_DIR}/uninstall-${TS}"
 
+QBT_HTTP_PORT_HOST="${QBT_HTTP_PORT_HOST:-8080}"
+GLUETUN_CONTROL_PORT="${GLUETUN_CONTROL_PORT:-8000}"
+
+SONARR_PORT="${SONARR_PORT:-8989}"
+RADARR_PORT="${RADARR_PORT:-7878}"
+PROWLARR_PORT="${PROWLARR_PORT:-9696}"
+BAZARR_PORT="${BAZARR_PORT:-6767}"
+FLARESOLVERR_PORT="${FLARESOLVERR_PORT:-8191}"
+
 ALL_CONTAINERS="gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr"
 ALL_NATIVE_SERVICES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent qbittorrent-nox transmission-daemon transmission-common"
 ALL_PACKAGES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent qbittorrent-nox transmission-daemon transmission-common"
-CRITICAL_PORTS="8080 8989 7878 9696 6767 8191 8000"
+CRITICAL_PORTS="${QBT_HTTP_PORT_HOST} ${SONARR_PORT} ${RADARR_PORT} ${PROWLARR_PORT} ${BAZARR_PORT} ${FLARESOLVERR_PORT} ${GLUETUN_CONTROL_PORT}"
 
 # ----- logging helpers -------------------------------------------------------
 step() { printf '\n\033[1;36m== %s ==\033[0m\n' "$1"; }
