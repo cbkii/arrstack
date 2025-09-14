@@ -54,3 +54,4 @@ docker/
 arrconf/*
 !arrconf/README.md
 !arrconf/.gitkeep
+!arrconf/userconf.sh
