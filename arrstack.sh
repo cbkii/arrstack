@@ -59,7 +59,7 @@ ts() {
   local now diff
   now=$(date +%s)
   diff=$((now - SCRIPT_START))
-  printf '%02d:%02d' $((diff/60)) $((diff%60))
+  printf '%02d:%02d' $((diff / 60)) $((diff % 60))
 }
 
 out() {
@@ -72,7 +72,10 @@ note() { out "$(ts) ${C_BLUE}➤ $1${C_RESET}"; }
 ok() { out "$(ts) ${C_GREEN}✔ $1${C_RESET}"; }
 warn() { out "$(ts) ${C_YELLOW}⚠ $1${C_RESET}"; }
 err() { out "$(ts) ${C_RED}✖ $1${C_RESET}"; }
-die() { err "$1"; exit 1; }
+die() {
+  err "$1"
+  exit 1
+}
 
 # shellcheck disable=SC2015
 trace() { [ "$DEBUG" = "1" ] && printf "[trace] %s\n" "$1" >>"${LOG_FILE}" || true; }
@@ -101,7 +104,11 @@ run_cmd() {
     return 0
   fi
 
-  { printf '+ ' ; printf '%q ' "${cmd[@]}" ; printf '\n'; } >>"${LOG_FILE}"
+  {
+    printf '+ '
+    printf '%q ' "${cmd[@]}"
+    printf '\n'
+  } >>"${LOG_FILE}"
 
   local status
   set +e
@@ -165,7 +172,7 @@ check_deps() {
   command -v ss >/dev/null 2>&1 || pkgs+=(iproute2)
   command -v openssl >/dev/null 2>&1 || pkgs+=(openssl)
   command -v xxd >/dev/null 2>&1 || pkgs+=(xxd)
-  if (( ${#pkgs[@]} )); then
+  if ((${#pkgs[@]})); then
     note "Installing packages: ${pkgs[*]}"
     run_cmd --spinner sudo apt-get update -y || true
     run_cmd --spinner sudo apt-get install -y "${pkgs[@]}" || true
@@ -389,10 +396,13 @@ find_wg_conf() {
     return 0
   fi
   for c in "${ARR_DOCKER_DIR}/gluetun/${n}" \
-           "${ARR_DOCKER_DIR}/gluetun"/wg*.conf \
-          "${LEGACY_VPNCONFS_DIR}"/wg*.conf \
-          "${LEGACY_VPNCONFS_DIR}/${n}"; do
-    [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }
+    "${ARR_DOCKER_DIR}/gluetun"/wg*.conf \
+    "${LEGACY_VPNCONFS_DIR}"/wg*.conf \
+    "${LEGACY_VPNCONFS_DIR}/${n}"; do
+    [[ -e "$c" ]] && {
+      printf '%s\n' "$c"
+      return 0
+    }
   done
   return 1
 }
@@ -528,7 +538,7 @@ ensure_qbt_conf() {
   local conf="${conf_dir}/qBittorrent.conf"
   install -d -m 0750 -o "${PUID}" -g "${PGID}" "${conf_dir}"
   if [ ! -f "${conf}" ]; then
-    cat > "${conf}" <<CONFEOF
+    cat >"${conf}" <<CONFEOF
 [Preferences]
 # --- WebUI security & LAN behaviour ---
 WebUI\\BypassLocalAuth=true
@@ -550,19 +560,25 @@ Downloads\\SavePath=${QBT_SAVE_PATH}
 Downloads\\TempPath=${QBT_TEMP_PATH}
 Downloads\\TempPathEnabled=true
 CONFEOF
-    chown "${PUID}:${PGID}" "${conf}"; chmod 0640 "${conf}"
+    chown "${PUID}:${PGID}" "${conf}"
+    chmod 0640 "${conf}"
   fi
 }
 
-need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1" >&2; return 1; }; }
+need() { command -v "$1" >/dev/null 2>&1 || {
+  echo "Missing dependency: $1" >&2
+  return 1
+}; }
 
 check_hash_deps() {
   need openssl && need base64 && need sed && need awk && need grep || return 1
   if ! openssl version | grep -qE 'OpenSSL 3\.'; then
-    echo "OpenSSL 3 required (found: $(openssl version))" >&2; return 1
+    echo "OpenSSL 3 required (found: $(openssl version))" >&2
+    return 1
   fi
   if ! openssl kdf -help >/dev/null 2>&1; then
-    echo "'openssl kdf' subcommand not available; need OpenSSL 3" >&2; return 1
+    echo "'openssl kdf' subcommand not available; need OpenSSL 3" >&2
+    return 1
   fi
 }
 
@@ -573,11 +589,11 @@ derive_qbt_hash() {
   local salt_hex dk_b64 salt_b64
   salt_hex="$(openssl rand -hex 16)"
   dk_b64="$(openssl kdf -binary -keylen 64 \
-              -kdfopt digest:SHA512 \
-              -kdfopt pass:"${QBT_PASS}" \
-              -kdfopt hexsalt:"${salt_hex}" \
-              -kdfopt iter:100000 \
-            PBKDF2 | base64 | tr -d '\n')"
+    -kdfopt digest:SHA512 \
+    -kdfopt pass:"${QBT_PASS}" \
+    -kdfopt hexsalt:"${salt_hex}" \
+    -kdfopt iter:100000 \
+    PBKDF2 | base64 | tr -d '\n')"
   if command -v xxd >/dev/null 2>&1; then
     salt_b64="$(printf '%s' "${salt_hex}" | xxd -r -p | base64 | tr -d '\n')"
   else
@@ -610,22 +626,23 @@ Downloads\TempPathEnabled=true
 CONFEOF
   fi
 
-  grep -q '^\[Preferences\]' "${cfg}" || printf '\n[Preferences]\n' >> "${cfg}"
+  grep -q '^\[Preferences\]' "${cfg}" || printf '\n[Preferences]\n' >>"${cfg}"
 
   if grep -q '^WebUI\\Username=' "${cfg}"; then
     sed -i.bak "s#^WebUI\\Username=.*#WebUI\\Username=${QBT_USER}#g" "${cfg}"
   else
-    printf 'WebUI\\Username=%s\n' "${QBT_USER}" >> "${cfg}"
+    printf 'WebUI\\Username=%s\n' "${QBT_USER}" >>"${cfg}"
   fi
 
   local pb_line="WebUI\\Password_PBKDF2=\"@ByteArray(${SALT_B64}:${DK_B64})\""
   if grep -q '^WebUI\\Password_PBKDF2=' "${cfg}"; then
     sed -i.bak "s#^WebUI\\Password_PBKDF2=.*#${pb_line//#/\\#}#g" "${cfg}"
   else
-    printf '%s\n' "${pb_line}" >> "${cfg}"
+    printf '%s\n' "${pb_line}" >>"${cfg}"
   fi
 
-  chown "${PUID}:${PGID}" "${cfg}"; chmod 0640 "${cfg}"
+  chown "${PUID}:${PGID}" "${cfg}"
+  chmod 0640 "${cfg}"
   rm -f "${cfg}.bak" 2>/dev/null || true
 }
 

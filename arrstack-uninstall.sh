@@ -202,7 +202,10 @@ purge_arrconf() {
   [[ "$PURGE_ARRCONF" -eq 1 ]] || return 0
   [[ -d "$ARRCONF_DIR" ]] || return 0
   read -r -p "Purge arrconf (secrets) directory? (y/N) " ans
-  [[ $ans =~ ^[Yy]$ ]] || { note "Kept ${ARRCONF_DIR}"; return 0; }
+  [[ $ans =~ ^[Yy]$ ]] || {
+    note "Kept ${ARRCONF_DIR}"
+    return 0
+  }
   mkdir -p "${BACKUP_SUBDIR}"
   if [[ ! -f "${BACKUP_SUBDIR}/arrconf.tgz" ]]; then
     tar -C "$(dirname "$ARRCONF_DIR")" -czf "${BACKUP_SUBDIR}/arrconf.tgz" "$(basename "$ARRCONF_DIR")"
