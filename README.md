@@ -45,6 +45,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    ```
 
    The installer writes configuration and runtime files under `~/srv/arrstack`, keeping the Git checkout clean.
+   Sensitive VPN materials go in `./arrconf/` (created in this repo). Keep the directory `chmod 700` and any files inside `chmod 600`.
 
 2. **Review and customise configuration:**
 
@@ -56,10 +57,10 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    nano arrstack-uninstall.sh   # optional reset script
    ```
 
-    * Pre-seed Proton auth (username on line 1, password on line 2, `chmod 600`) at `~/srv/wg-configs/proton-credentials.conf` to restore automatically.
+    * Place Proton credentials in `./arrconf/proton.auth` (two lines: `PROTON_USER=...` and `PROTON_PASS=...`). Keep the folder `chmod 700` and the file `chmod 600`.
     * Proton port forwarding requires the OpenVPN username to end with **`+pmp`** (the installer auto-appends).
     * Provider mode means no `.ovpn` file is needed – `VPN_SERVICE_PROVIDER=protonvpn` handles Proton configs. Drop `.ovpn` files only when using a custom provider.
-    * The emergency fallback to wireguard will also look for a server `.conf` in `~/srv/wg-configs/wg*.conf`.
+    * For WireGuard fallback, drop Proton `wg*.conf` files into `./arrconf/` (legacy `~/srv/...` paths are migrated automatically).
     * LinuxServer/qB requires the mapped port and `WEBUI_PORT` to match; editing `QBT_WEBUI_PORT` updates the compose mapping, container setting, healthcheck and port-forward hook together.
 
 3. **Run it** as your normal user:
@@ -68,7 +69,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    ./arrstack.sh
    ```
 
-     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if `~/srv/docker/gluetun/proton-credentials.conf` is missing. 
+     * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **warns if `./arrconf/proton.auth` is missing**.
      * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script adds `+pmp` automatically for OpenVPN port forwarding.
 
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
@@ -123,6 +124,7 @@ pvpn reconnect    # restart Gluetun
 pvpn mode ovpn    # switch to OpenVPN (recommended for port forwarding)
 pvpn mode wg      # switch to WireGuard (optional)
 pvpn creds        # update Proton username/password (adds +pmp automatically)
+pvpn paths        # show credential & config locations
 pvpn portsync     # force qB to use the currently forwarded port
 ```
 
@@ -130,12 +132,10 @@ pvpn portsync     # force qB to use the currently forwarded port
 
 ## Optional: WireGuard fallback
 
-If you want to enable the fallback to wireguard, download a Proton **WireGuard** `.conf` from their site:
+If you want to enable the fallback to wireguard, download a Proton **WireGuard** `.conf` from their site and place it in `./arrconf/` (name it `wg*.conf` or `proton.conf`).
 
-1. Drop it in `~/srv/docker/gluetun/` or `~/srv/wg-configs/`.
-2. Rename as `wg*.conf` or `proton.conf`.
-2. Re-run the installer once (it may auto-seed the private key).
-3. Switch when you want:
+1. Re-run the installer once (it may auto-seed the private key).
+2. Switch when you want:
 
    ```bash
    pvpn mode wg
@@ -192,7 +192,7 @@ All services bind to `LAN_IP` (`192.168.1.50` by default).
 * **Force qB to current PF:** `pvpn portsync`
 * **MTU issues (WireGuard):** lower `WIREGUARD_MTU` in `.env` from `1320` to `1280` or `1200`.
 * **DNS issues:** Gluetun uses DNS over TLS by default; `DOT=off` trades privacy for compatibility.
-* **Re-seed Proton creds:** copy fresh files to `${PROTON_CREDS_FBAK}` and re-run the installer.
+* **Re-seed Proton creds:** update `./arrconf/proton.auth` and re-run the installer.
 
 To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `${GLUETUN_CONTROL_HOST}` for local-only or `0.0.0.0` for all) and rerun:
 
@@ -214,6 +214,6 @@ Run the provided `arrstack-uninstall.sh` script to back up existing configuratio
 
 ## Notes
 
-* Proton credentials live at `~/srv/docker/gluetun/proton-credentials.conf` (`chmod 600`). Keep a backup at `~/srv/wg-configs/proton-credentials.conf` and the installer will seed from it if the main file is missing. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
+* Proton credentials live at `./arrconf/proton.auth` (`chmod 600` inside a `chmod 700` folder). Legacy files under `~/srv/docker/gluetun/` or `~/srv/wg-configs/` are migrated automatically. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
 * `.env` is also `chmod 600` and only contains what Compose needs.
 * You can customise paths and ports by editing the variables at the top of the script before running it.

@@ -5,12 +5,18 @@
 set -euo pipefail
 
 # ----------------------------[ USER CONFIG ]-----------------------------------
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USER_NAME="${USER:-$(id -un)}"
 ARR_BASE="/home/${USER_NAME}/srv"
 ARR_DOCKER_DIR="${ARR_BASE}/docker"
 ARR_STACK_DIR="${ARR_BASE}/arrstack"
 ARR_BACKUP_DIR="${ARR_BASE}/backups"
-ARR_VPNCONFS_DIR="${ARR_BASE}/wg-configs" # Put Proton files (.conf, etc.) here
+ARRCONF_DIR="${REPO_ROOT}/arrconf"
+
+# Legacy secrets paths (auto-migrated on first run)
+LEGACY_VPNCONFS_DIR="${ARR_BASE}/wg-configs"     # legacy Proton WG config directory
+LEGACY_CREDS_DOCKER="${ARR_DOCKER_DIR}/gluetun/proton-credentials.conf" # legacy OpenVPN creds
+LEGACY_CREDS_WG="${LEGACY_VPNCONFS_DIR}/proton-credentials.conf"         # legacy WG creds
 
 # Local IP for binding services
 LAN_IP="192.168.1.50" # set to your host's LAN IP
@@ -30,6 +36,7 @@ QBT_WEBUI_PORT="8080"     # qBittorrent WebUI port inside container
 QBT_HTTP_PORT_HOST="8080" # host port mapped to qBittorrent
 QBT_USER=""
 QBT_PASS=""
+GLUETUN_API_KEY=""
 
 # Service ports (host:container)
 SONARR_PORT="8989"
@@ -44,12 +51,10 @@ PGID="$(id -g)"
 TIMEZONE="Australia/Sydney"
 
 # Proton defaults and selection
+PROTON_AUTH_FILE="${ARRCONF_DIR}/proton.auth"
 DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
 SERVER_COUNTRIES="Netherlands,Germany,Switzerland,Australia,Spain,United States"
 DEFAULT_COUNTRY="Australia"
-PROTON_CREDS_FILE="${ARR_DOCKER_DIR}/gluetun/proton-credentials.conf"
-PROTON_CREDS_FBAK="${ARR_VPNCONFS_DIR}/proton-credentials.conf"
-GLUETUN_API_KEY=""
 
 # Service/package lists (kept at least as broad as originals)
 ALL_CONTAINERS="gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr"
@@ -66,11 +71,11 @@ NO_COLOR="${NO_COLOR:-0}"
 VPN_MODE="${DEFAULT_VPN_MODE}"
 
 # Export for compose templating
-export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_VPNCONFS_DIR
+export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR LEGACY_VPNCONFS_DIR ARRCONF_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST PUID PGID TIMEZONE
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
-export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY PROTON_CREDS_FILE PROTON_CREDS_FBAK GLUETUN_API_KEY
+export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
 
 # ----------------------------[ LOGGING ]---------------------------------------
 if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
@@ -137,7 +142,7 @@ atomic_write() {
 
 # ----------------------------[ PRECHECKS ]-------------------------------------
 check_deps() {
-  step "0A/12 Checking prerequisites"
+  step "1/15 Checking prerequisites"
   [[ "$(whoami)" == "${USER_NAME}" ]] || die "Run as '${USER_NAME}' (current: $(whoami))"
   for b in docker wget curl openssl; do command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"; done
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
@@ -155,7 +160,7 @@ compose_cmd() { (
   run_cmd docker compose "$@"
 ); }
 stop_stack_if_present() {
-  step "0B/12 Stopping any existing stack"
+  step "2/15 Stopping any existing stack"
   compose_cmd down >/dev/null 2>&1 || true
 }
 stop_named_containers() {
@@ -204,14 +209,14 @@ clean_targeted_volumes() {
 
 # -------------------------[ DIRECTORIES & BACKUP ]-----------------------------
 create_dirs() {
-  step "1/12 Creating folders"
+  step "3/15 Creating folders"
   ensure_dir "${ARR_STACK_DIR}"
   ensure_dir "${ARR_BACKUP_DIR}"
   for d in gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr; do ensure_dir "${ARR_DOCKER_DIR}/${d}"; done
   for d in "${MEDIA_DIR}" "${DOWNLOADS_DIR}" "${DOWNLOADS_DIR}/incomplete" "${COMPLETED_DIR}" "${MEDIA_DIR}" "${MOVIES_DIR}" "${TV_DIR}" "${SUBS_DIR}"; do ensure_dir "$d"; done
 }
 backup_configs() {
-  step "2/12 Backing up ALL existing configurations"
+  step "4/15 Backing up ALL existing configurations"
   local TS
   TS="$(date +%Y%m%d-%H%M%S)"
   BACKUP_SUBDIR="${ARR_BACKUP_DIR}/backup-${TS}"
@@ -243,7 +248,7 @@ backup_configs() {
   export NATIVE_DIRS
 }
 move_native_dirs() {
-  step "3/12 Moving native application directories"
+  step "5/15 Moving native application directories"
   local NATIVE_MOVE_DIR="${BACKUP_SUBDIR}/native-configs"
   ensure_dir "${NATIVE_MOVE_DIR}"
   for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then
@@ -252,7 +257,7 @@ move_native_dirs() {
   fi; done
 }
 purge_native_packages() {
-  step "4/12 Purging ALL native packages"
+  step "6/15 Purging ALL native packages"
   run_cmd sudo apt-get update -y >/dev/null 2>&1 || true
   for PKG in ${ALL_PACKAGES}; do if dpkg -l | grep -q "^ii.*${PKG}"; then
     note "Purging ${PKG}…"
@@ -262,7 +267,7 @@ purge_native_packages() {
   ok "Native packages purged"
 }
 final_docker_cleanup() {
-  step "5/12 Final Docker cleanup pass"
+  step "7/15 Final Docker cleanup pass"
   for CONTAINER in ${ALL_CONTAINERS}; do
     if docker ps -aq --filter "name=${CONTAINER}" | grep -q .; then
       run_cmd docker rm -f "$(docker ps -aq --filter "name=${CONTAINER}")" >/dev/null 2>&1 || true
@@ -273,30 +278,44 @@ final_docker_cleanup() {
   ok "Docker containers cleaned"
 }
 
-# ---------------------------[ PROTON CREDS ]----------------------------------
-ensure_creds_template() {
-  step "6/12 Ensuring Proton credential file"
-  ensure_dir "${ARR_DOCKER_DIR}/gluetun"
-  if [[ ! -f "${PROTON_CREDS_FILE}" ]]; then
-    if [[ -f "${PROTON_CREDS_FBAK}" ]]; then
-      cp "$PROTON_CREDS_FBAK" "${PROTON_CREDS_FILE}"
-      ok "Copied a backup to ${PROTON_CREDS_FILE}"
+# ---------------------------[ ARRCONF SECRETS ]--------------------------------
+harden_arrconf() {
+  ensure_dir "${ARRCONF_DIR}"
+  local changed=0
+  if [[ $(stat -c '%a' "${ARRCONF_DIR}" 2>/dev/null) != "700" ]]; then
+    run_cmd chmod 700 "${ARRCONF_DIR}"
+    changed=1
+  fi
+  shopt -s nullglob
+  for f in "${ARRCONF_DIR}"/proton.auth "${ARRCONF_DIR}"/wg*.conf; do
+    [[ -e "$f" ]] || continue
+    if [[ $(stat -c '%a' "$f" 2>/dev/null) != "600" ]]; then
+      run_cmd chmod 600 "$f"
+      changed=1
+    fi
+  done
+  shopt -u nullglob
+  [[ $changed -eq 1 ]] && warn "Tightened permissions in ${ARRCONF_DIR}"
+}
+
+ensure_proton_auth() {
+  step "8/15 Ensuring Proton auth"
+  harden_arrconf
+  if [[ ! -f "${PROTON_AUTH_FILE}" ]]; then
+    if [[ -f "${LEGACY_CREDS_WG}" ]]; then
+      mv "${LEGACY_CREDS_WG}" "${PROTON_AUTH_FILE}"
+      warn "Migrated legacy creds from ${LEGACY_CREDS_WG}"
+    elif [[ -f "${LEGACY_CREDS_DOCKER}" ]]; then
+      mv "${LEGACY_CREDS_DOCKER}" "${PROTON_AUTH_FILE}"
+      warn "Migrated legacy creds from ${LEGACY_CREDS_DOCKER}"
     else
-      atomic_write "${PROTON_CREDS_FILE}" "# Proton account credentials (do NOT include +pmp here)\n# Get from https://account.proton.me/u/0/vpn/OpenVpnIKEv2\nPROTON_USER=\nPROTON_PASS=\n# Optional: WireGuard key for fallback\nWIREGUARD_PRIVATE_KEY=\nVPN_MODE=${DEFAULT_VPN_MODE}\nSERVER_COUNTRIES=${SERVER_COUNTRIES}\n"
+      atomic_write "${PROTON_AUTH_FILE}" "# Proton account credentials (do NOT include +pmp)\nPROTON_USER=\nPROTON_PASS=\n"
+      warn "Created template ${PROTON_AUTH_FILE}; edit with your Proton credentials"
     fi
   else
-    ok "Found ${PROTON_CREDS_FILE}"
+    ok "Found ${PROTON_AUTH_FILE}"
   fi
-  if ! grep -q '^PROTON_USER=' "${PROTON_CREDS_FILE}" || ! grep -q '^PROTON_PASS=' "${PROTON_CREDS_FILE}"; then
-    local user pass
-    IFS= read -r -p "Proton username (without +pmp): " user
-    IFS= read -r -s -p "Proton password: " pass
-    printf '\n'
-    sed -i '/^PROTON_USER=/d;/^PROTON_PASS=/d' "${PROTON_CREDS_FILE}"
-    echo "PROTON_USER=${user}" >>"${PROTON_CREDS_FILE}"
-    echo "PROTON_PASS=${pass}" >>"${PROTON_CREDS_FILE}"
-  fi
-  run_cmd chmod 600 "${PROTON_CREDS_FILE}"
+  run_cmd chmod 600 "${PROTON_AUTH_FILE}"
 }
 ensure_pmp() {
   local u="$1"
@@ -309,16 +328,29 @@ ensure_pmp() {
 # Locate a WireGuard configuration file. Optionally pass a specific
 # filename (default: "proton.conf"). Returns the first existing path.
 find_wg_conf() {
-  local n="proton.conf" c
+  local n="proton.conf" c files=()
   [ $# -gt 0 ] && n="$1"
+  if [[ -d "${ARRCONF_DIR}" ]]; then
+    if [[ -f "${ARRCONF_DIR}/${n}" ]]; then
+      files=("${ARRCONF_DIR}/${n}")
+    else
+      shopt -s nullglob
+      files=("${ARRCONF_DIR}"/wg*.conf)
+      shopt -u nullglob
+      if [[ ${#files[@]} -gt 1 ]]; then
+        warn "Multiple WireGuard configs in ${ARRCONF_DIR}; using $(basename "${files[0]}")"
+      fi
+    fi
+  fi
+  if [[ ${#files[@]} -gt 0 ]]; then
+    printf '%s\n' "${files[0]}"
+    return 0
+  fi
   for c in "${ARR_DOCKER_DIR}/gluetun/${n}" \
-   "${ARR_DOCKER_DIR}/gluetun"/wg*.conf \
-   "${ARR_VPNCONFS_DIR}"/wg*.conf \
-   "${ARR_VPNCONFS_DIR}/${n}"; do
-    [[ -e "$c" ]] && {
-      printf '%s\n' "$c"
-      return 0
-    }
+           "${ARR_DOCKER_DIR}/gluetun"/wg*.conf \
+          "${LEGACY_VPNCONFS_DIR}"/wg*.conf \
+          "${LEGACY_VPNCONFS_DIR}/${n}"; do
+    [[ -e "$c" ]] && { printf '%s\n' "$c"; return 0; }
   done
   return 1
 }
@@ -333,7 +365,7 @@ parse_wg_conf() {
 
 # ------------------------------[ GLUETUN AUTH ]--------------------------------
 make_gluetun_apikey() {
-  step "7/12 Generating Gluetun API key"
+  step "9/15 Generating Gluetun API key"
   if [[ -f "${ARR_STACK_DIR}/.env" ]]; then
     GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || true)"
   fi
@@ -350,7 +382,7 @@ make_gluetun_apikey() {
   fi
 }
 write_gluetun_auth() {
-  step "8/12 Writing Gluetun RBAC config"
+  step "10/15 Writing Gluetun RBAC config"
   local AUTH_DIR="${ARR_DOCKER_DIR}/gluetun/auth"
   ensure_dir "$AUTH_DIR"
   local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="readonly"\nauth="basic"\nusername="gluetun"\npassword="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/openvpn/status","GET /v1/wireguard/status","GET /v1/publicip/ip","GET /v1/openvpn/portforwarded"]\n'
@@ -361,15 +393,13 @@ write_gluetun_auth() {
 # ---------------------------[ PORT MONITOR ]-----------------------------------
 # ------------------------------[ .ENV FILE ]-----------------------------------
 write_env() {
-  step "9/12 Writing stack .env"
+  step "11/15 Writing stack .env"
   local envf="${ARR_STACK_DIR}/.env"
   ensure_dir "${ARR_STACK_DIR}"
-  local PU="" PP="" WG="" CN="${SERVER_COUNTRIES}"
-  if [[ -f "${PROTON_CREDS_FILE}" ]]; then
-    PU="$(grep -E '^PROTON_USER=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || true)"
-    PP="$(grep -E '^PROTON_PASS=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || true)"
-    WG="$(grep -E '^WIREGUARD_PRIVATE_KEY=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || true)"
-    CN="$(grep -E '^SERVER_COUNTRIES=' "${PROTON_CREDS_FILE}" | cut -d= -f2- | tr -d '"' || echo "${SERVER_COUNTRIES}")"
+  local PU="" PP="" CN="${SERVER_COUNTRIES}"
+  if [[ -f "${PROTON_AUTH_FILE}" ]]; then
+    PU="$(grep -E '^PROTON_USER=' "${PROTON_AUTH_FILE}" | cut -d= -f2- | tr -d '"' || true)"
+    PP="$(grep -E '^PROTON_PASS=' "${PROTON_AUTH_FILE}" | cut -d= -f2- | tr -d '"' || true)"
   fi
   cat >"${envf}" <<EOF
 # IDs & timezone
@@ -413,17 +443,13 @@ SERVER_COUNTRIES=${CN}
 UPDATER_PERIOD=24h
 EOF
   if [[ "${VPN_MODE}" = "openvpn" ]]; then
+    [[ -n "${PU}" && -n "${PP}" ]] || die "Missing Proton credentials at ${PROTON_AUTH_FILE}"
     {
-      echo "PROTON_USER=${PU}"
-      echo "PROTON_PASS=${PP}"
       echo "OPENVPN_USER=$(ensure_pmp "${PU}")"
       echo "OPENVPN_PASSWORD=${PP}"
     } >>"${envf}"
   else
     {
-      echo "WIREGUARD_PRIVATE_KEY=${WG}"
-      echo "WIREGUARD_ADDRESSES="
-      echo "VPN_DNS_ADDRESS="
       echo "WIREGUARD_MTU=1320"
     } >>"${envf}"
   fi
@@ -443,7 +469,7 @@ seed_wireguard_from_conf() {
   local VM CONF K A D
   VM="$(grep -E '^VPN_MODE=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
   if [[ "$VM" = "wireguard" ]]; then
-    CONF="$(find_wg_conf "proton.conf" 2>/dev/null)" || die "VPN_MODE=wireguard but no WireGuard .conf found in ${ARR_VPNCONFS_DIR} or ${ARR_DOCKER_DIR}/gluetun"
+    CONF="$(find_wg_conf "proton.conf" 2>/dev/null)" || die "VPN_MODE=wireguard but no WireGuard .conf found in ${ARRCONF_DIR}, ${ARR_DOCKER_DIR}/gluetun or ${LEGACY_VPNCONFS_DIR}"
     read -r K A D < <(parse_wg_conf "$CONF" 2>/dev/null) || die "Malformed WireGuard config: $CONF"
     sed -i '/^WIREGUARD_PRIVATE_KEY=/d;/^WIREGUARD_ADDRESSES=/d;/^VPN_DNS_ADDRESS=/d' "${ARR_STACK_DIR}/.env"
     echo "WIREGUARD_PRIVATE_KEY=${K}" >>"${ARR_STACK_DIR}/.env"
@@ -479,7 +505,7 @@ PY
 
 # ---------------------------[ COMPOSE FILE ]-----------------------------------
 write_compose() {
-  step "10/12 Writing docker-compose.yml"
+  step "12/15 Writing docker-compose.yml"
   {
     cat <<'YAML'
 services:
@@ -695,28 +721,26 @@ validate_creds_or_die() {
   local VM ENVF="${ARR_STACK_DIR}/.env"
   VM="$(grep -E '^VPN_MODE=' "$ENVF" | cut -d= -f2- || echo openvpn)"
   if [[ "$VM" = openvpn ]]; then
-    local PU PP
-    PU="$(grep -E '^PROTON_USER=' "$ENVF" | cut -d= -f2- || true)"
-    PP="$(grep -E '^PROTON_PASS=' "$ENVF" | cut -d= -f2- || true)"
-    if [[ -z "${PU}" || -z "${PP}" ]]; then
-      err "Proton credentials missing. Edit ${PROTON_CREDS_FILE} then re-run."
+    local OU OP
+    OU="$(grep -E '^OPENVPN_USER=' "$ENVF" | cut -d= -f2- || true)"
+    OP="$(grep -E '^OPENVPN_PASSWORD=' "$ENVF" | cut -d= -f2- || true)"
+    if [[ -z "${OU}" || -z "${OP}" ]]; then
+      err "Proton credentials missing. Edit ${PROTON_AUTH_FILE} then re-run."
       exit 2
     fi
-    local OU
-    OU="$(grep -E '^OPENVPN_USER=' "$ENVF" | cut -d= -f2- || true)"
-    if [[ -z "$OU" || "$OU" != *+pmp ]]; then
+    if [[ "$OU" != *+pmp ]]; then
       warn "Fixing OPENVPN_USER to include +pmp"
       sed -i '/^OPENVPN_USER=/d' "$ENVF"
-      echo "OPENVPN_USER=$(ensure_pmp "$PU")" >>"$ENVF"
+      echo "OPENVPN_USER=$(ensure_pmp "$OU")" >>"$ENVF"
     fi
   fi
 }
 pull_images() {
-  step "11/12 Pulling images"
+  step "13/15 Pulling images"
   compose_cmd pull || warn "Pull failed; will rely on up"
 }
 start_with_checks() {
-  step "12/12 Starting the stack with enhanced health monitoring"
+  step "14/15 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
   local VM
   VM="$(grep -E '^VPN_MODE=' "${ARR_STACK_DIR}/.env" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
@@ -773,7 +797,7 @@ start_with_checks() {
 }
 
 install_aliases() {
-  step "Installing ARR helper aliases"
+  step "15/15 Installing ARR helper aliases"
   local src
   src="$(dirname "${BASH_SOURCE[0]}")/.aliasarr"
   local dst="${ARR_STACK_DIR}/.aliasarr"
@@ -790,6 +814,7 @@ install_aliases() {
         printf '%s\n' "export ARR_DOCKER_DIR=\"$ARR_DOCKER_DIR\""
         printf '%s\n' "export ARR_BACKUP_DIR=\"$ARR_BACKUP_DIR\""
         printf '%s\n' "export ARR_ENV_FILE=\"$ARR_STACK_DIR/.env\""
+        printf '%s\n' "export ARRCONF_DIR=\"$ARRCONF_DIR\""
         printf '%s\n' "export LAN_IP=\"$LAN_IP\""
         printf '%s\n' "$line"
       } >>"$shellrc"
@@ -803,7 +828,7 @@ install_aliases() {
 # --------------------------------[ MAIN ]--------------------------------------
 main() {
   parse_args "$@"
-  step "ARR+VPN merged installer"
+  step "0/15 ARR+VPN merged installer"
   check_deps
   stop_stack_if_present
   stop_named_containers
@@ -816,7 +841,7 @@ main() {
   move_native_dirs
   purge_native_packages
   final_docker_cleanup
-  ensure_creds_template
+  ensure_proton_auth
   make_gluetun_apikey
   warn_lan_ip
   write_gluetun_auth
@@ -829,7 +854,7 @@ main() {
   install_aliases
   echo
   ok "Done. Next steps:"
-  echo "  • Edit ${PROTON_CREDS_FILE} (username WITHOUT +pmp) if you haven't already."
+  echo "  • Edit ${PROTON_AUTH_FILE} (username WITHOUT +pmp) if you haven't already."
   echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (initial password shown above; set QBT_USER/QBT_PASS before first run to preseed)."
 }
 

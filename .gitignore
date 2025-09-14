@@ -49,3 +49,8 @@ docker-compose.yml
 backups/
 docker/
 
+
+# Proton credentials and WG configs
+arrconf/*
+!arrconf/README.md
+!arrconf/.gitkeep
