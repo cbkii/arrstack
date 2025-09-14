@@ -52,7 +52,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 2. **Review and customise configuration:**
 
    * Defaults live in the `USER CONFIG` section of `arrstack.sh`. To keep the installer clean, override any of these settings in `arrconf/userconf.sh` by uncommenting the lines you need; the file is sourced on every run so you can adjust it before the first install or later and rerun the script.
-  * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
+  * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`, `SERVER_CC_PRIORITY`).
     * Set `QBT_PASS` in **plain text** – the installer hashes it with PBKDF2 (via OpenSSL 3) before writing `qBittorrent.conf`. If OpenSSL 3 isn't available, the script warns and ignores these values.
 
    ```bash
@@ -137,6 +137,28 @@ pvpn creds        # update Proton username/password (adds +pmp automatically)
 pvpn paths        # show credential & config locations
 pvpn portsync     # force qB to use the currently forwarded port
 ```
+
+1. **Initial location is random within `SERVER_COUNTRIES`.** To control where you start, keep `SERVER_COUNTRIES` short (1–3) with **privacy-friendly countries**. We default to:
+
+   ```
+   SERVER_COUNTRIES="Switzerland,Iceland,Sweden,Netherlands"
+   ```
+
+   * Why these? Proton’s **Secure Core** runs in **Switzerland, Iceland, Sweden** (privacy-strong); **Netherlands** and **Romania** have had indiscriminate data retention laws **struck down**; **Luxembourg** has strong data-protection. Other privacy-friendly options: Romania, Luxembourg.
+
+2. **Switching later** is easy via `.aliasarr`:
+
+   * `arr_vpn_country "<Country>"` — switch to a specific country; if it fails, the function retries through `SERVER_CC_PRIORITY`.
+   * `arr_vpn_fastest [N]` — probe the first *N* countries in `SERVER_CC_PRIORITY` (default 6), pick the lowest RTT from AU, and switch there.
+   * `arr_vpn_servers` — list Proton countries from the current server list.
+
+3. **Priority list used for switching/speed trials from Australia** (fast → slow):
+
+   ```
+   SERVER_CC_PRIORITY="Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg"
+   ```
+
+   * Rationale: geographic proximity/typical subsea paths from AU → SE/E Asia → US-West → Western Europe. Validate with your line by running `arr_vpn_fastest`.
 
 ---
 
@@ -227,3 +249,4 @@ Run the provided `arrstack-uninstall.sh` script to back up existing configuratio
 * Proton credentials live at `./arrconf/proton.auth` (`chmod 600` inside a `chmod 700` folder). Legacy files under `~/srv/docker/gluetun/` or `~/srv/wg-configs/` are migrated automatically. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
 * `.env` is also `chmod 600` and only contains what Compose needs.
 * You can customise paths and ports by editing the variables at the top of the script before running it.
+

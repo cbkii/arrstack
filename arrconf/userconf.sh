@@ -50,7 +50,8 @@
 # Proton defaults and selection
 # PROTON_AUTH_FILE="${ARRCONF_DIR}/proton.auth"
 # DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
-# SERVER_COUNTRIES="Netherlands,Germany,Switzerland,Australia,Spain,United States"
+# SERVER_COUNTRIES="Switzerland,Iceland,Sweden,Netherlands" # additional: Romania,Luxembourg
+# SERVER_CC_PRIORITY="Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg"
 # DEFAULT_COUNTRY="Australia"
 
 # Service/package lists (kept at least as broad as originals)

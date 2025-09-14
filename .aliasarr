@@ -43,6 +43,8 @@ RADARR_PORT="$(_arr_get RADARR_PORT)"; [[ -n "$RADARR_PORT" ]] || RADARR_PORT=78
 PROWLARR_PORT="$(_arr_get PROWLARR_PORT)"; [[ -n "$PROWLARR_PORT" ]] || PROWLARR_PORT=9696
 BAZARR_PORT="$(_arr_get BAZARR_PORT)"; [[ -n "$BAZARR_PORT" ]] || BAZARR_PORT=6767
 FLARESOLVERR_PORT="$(_arr_get FLARESOLVERR_PORT)"; [[ -n "$FLARESOLVERR_PORT" ]] || FLARESOLVERR_PORT=8191
+SERVER_COUNTRIES="$(_arr_get SERVER_COUNTRIES)"
+SERVER_CC_PRIORITY="$(_arr_get SERVER_CC_PRIORITY)"
 
 # Known services in this project (compose names)
 ARR_SERVICES=(gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr)
@@ -160,6 +162,85 @@ glue.ip()     { curl -fsS -u "gluetun:${GLUETUN_API_KEY}" "http://${LAN_IP}:${GL
 glue.pf()     { pvpn port; echo; }
 glue.health() { docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo n/a; }
 
+arr_vpn_servers() {
+  curl -fsS -u "gluetun:${GLUETUN_API_KEY}" \
+    "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/servers" |
+    jq -r '.protonvpn[].country' | sort -u
+}
+
+_arr_vpn_switch() {
+  local cc="$1"
+  if wget -qO- --method=PUT \
+      --header="Content-Type: application/json" \
+      --user="gluetun:${GLUETUN_API_KEY}" \
+      "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/settings" \
+      --post-data "{\"server_countries\":[\"${cc}\"]}" >/dev/null 2>&1; then
+    echo "Requested Gluetun switch to: ${cc}"
+    wget -qO- --method=PUT --user="gluetun:${GLUETUN_API_KEY}" \
+      "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/restart" >/dev/null 2>&1 || true
+    return 0
+  fi
+  echo "Control API settings PUT not available; restarting with ${cc}…"
+  SERVER_COUNTRIES="${cc}" _arr_dc up -d gluetun || return 1
+  return 0
+}
+
+arr_vpn_country() {
+  local cc="$*"
+  if [ -z "$cc" ]; then
+    echo "Usage: arr_vpn_country <Country Name>"; return 2
+  fi
+  local server_list
+  server_list="$(arr_vpn_servers 2>/dev/null || true)"
+  if [ -n "$server_list" ] && ! echo "$server_list" | grep -Fxq "$cc"; then
+    _arr_warn "${cc} not in server list; using priority order"
+    cc=""
+  fi
+  IFS=',' read -r -a cc_list <<< "${SERVER_CC_PRIORITY}"
+  local candidates=()
+  if [ -n "$cc" ]; then candidates+=("$cc"); fi
+  for c in "${cc_list[@]}"; do
+    [[ " ${candidates[*]} " =~ " $c " ]] || candidates+=("$c")
+  done
+  for cand in "${candidates[@]}"; do
+    _arr_vpn_switch "$cand" && return 0
+    _arr_warn "${cand} failed; trying next"
+  done
+  echo "All VPN country attempts failed"; return 1
+}
+
+arr_vpn_fastest() {
+  local limit="${1:-6}"
+  local tested=0 best_cc="" best_ms=""
+
+  IFS=',' read -r -a cc_list <<< "${SERVER_CC_PRIORITY}"
+  local server_list
+  server_list="$(arr_vpn_servers 2>/dev/null || true)"
+  for cc in "${cc_list[@]}"; do
+    [ $tested -ge $limit ] && break
+    if [ -n "$server_list" ] && ! echo "$server_list" | grep -Fxq "$cc"; then
+      continue
+    fi
+    _arr_vpn_switch "$cc" >/dev/null 2>&1 || continue
+    sleep 2
+    local ms
+    ms="$( (time -p nc -z -w 2 1.1.1.1 443) 2>&1 | awk '/real/{print $2*1000}' )" || ms="99999"
+    echo "Probe ${cc}: ${ms} ms"
+    if [ -z "$best_ms" ] || [ "${ms%.*}" -lt "${best_ms%.*}" ]; then
+      best_ms="$ms"; best_cc="$cc"
+    fi
+    tested=$((tested+1))
+  done
+
+  if [ -n "$best_cc" ]; then
+    echo "Fastest (heuristic): ${best_cc} (${best_ms} ms)"
+    _arr_vpn_switch "$best_cc"
+  else
+    echo "No result; using priority order fallback: ${cc_list[0]}"
+    _arr_vpn_switch "${cc_list[0]}"
+  fi
+}
+
 # ----------------[ qBittorrent helpers ]----------------
 _qbt_base()   { printf "http://%s:%s" "$QBT_HOST" "$QBT_HTTP_PORT_HOST"; }
 _qbt_cookie() { printf "/tmp/qbt-%s.cookie" "$USER"; }
@@ -265,5 +346,8 @@ alias pvpnstatus='pvpn status'
 alias pvpnconnect='pvpn connect'
 alias pvpnreconnect='pvpn reconnect'
 alias pvpnmode='pvpn mode'
+alias arrvpncountry='arr_vpn_country'
+alias arrvpnfastest='arr_vpn_fastest'
+alias arrvpnservers='arr_vpn_servers'
 
 # End of arr-stack/.aliasarr
