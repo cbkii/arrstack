@@ -156,14 +156,26 @@ atomic_write() {
 check_deps() {
   step "1/15 Checking prerequisites"
   [[ "$(whoami)" == "${USER_NAME}" ]] || die "Run as '${USER_NAME}' (current: $(whoami))"
-  for b in docker wget curl openssl; do command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"; done
-  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
-  if ! command -v ss >/dev/null 2>&1; then
-    note "Installing iproute2 for net utils"
+
+  local pkgs=()
+  command -v docker >/dev/null 2>&1 || pkgs+=(docker.io)
+  docker compose version >/dev/null 2>&1 || pkgs+=(docker-compose-plugin)
+  command -v wget >/dev/null 2>&1 || pkgs+=(wget)
+  command -v curl >/dev/null 2>&1 || pkgs+=(curl)
+  command -v ss >/dev/null 2>&1 || pkgs+=(iproute2)
+  command -v openssl >/dev/null 2>&1 || pkgs+=(openssl)
+  command -v xxd >/dev/null 2>&1 || pkgs+=(xxd)
+  if (( ${#pkgs[@]} )); then
+    note "Installing packages: ${pkgs[*]}"
     run_cmd --spinner sudo apt-get update -y || true
-    run_cmd --spinner sudo apt-get install -y iproute2 || true
+    run_cmd --spinner sudo apt-get install -y "${pkgs[@]}" || true
   fi
-  ok "Docker & Compose OK"
+
+  for b in docker wget curl ss openssl xxd; do
+    command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"
+  done
+  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
+  ok "All prerequisites installed"
 }
 
 # ----------------------------[ CLEANUP PHASE ]---------------------------------
@@ -540,31 +552,96 @@ Downloads\\TempPathEnabled=true
 CONFEOF
     chown "${PUID}:${PGID}" "${conf}"; chmod 0640 "${conf}"
   fi
+}
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1" >&2; return 1; }; }
+
+check_hash_deps() {
+  need openssl && need base64 && need sed && need awk && need grep || return 1
+  if ! openssl version | grep -qE 'OpenSSL 3\.'; then
+    echo "OpenSSL 3 required (found: $(openssl version))" >&2; return 1
+  fi
+  if ! openssl kdf -help >/dev/null 2>&1; then
+    echo "'openssl kdf' subcommand not available; need OpenSSL 3" >&2; return 1
+  fi
+}
+
+# Inputs: QBT_USER, QBT_PASS
+# Outputs: SALT_B64, DK_B64
+derive_qbt_hash() {
+  : "${QBT_USER:?QBT_USER not set}" "${QBT_PASS:?QBT_PASS not set}"
+  local salt_hex dk_b64 salt_b64
+  salt_hex="$(openssl rand -hex 16)"
+  dk_b64="$(openssl kdf -binary -keylen 64 \
+              -kdfopt digest:SHA512 \
+              -kdfopt pass:"${QBT_PASS}" \
+              -kdfopt hexsalt:"${salt_hex}" \
+              -kdfopt iter:100000 \
+            PBKDF2 | base64 | tr -d '\n')"
+  if command -v xxd >/dev/null 2>&1; then
+    salt_b64="$(printf '%s' "${salt_hex}" | xxd -r -p | base64 | tr -d '\n')"
+  else
+    salt_b64="$(printf "%b" "$(printf '%s' "${salt_hex}" | sed 's/../\\x&/g')" | base64 | tr -d '\n')"
+  fi
+  export SALT_B64="${salt_b64}" DK_B64="${dk_b64}"
+}
+
+write_qbt_conf_hash() {
+  local dir="${ARR_DOCKER_DIR}/qbittorrent"
+  local cfg="${dir}/qBittorrent.conf"
+  install -d -m 0750 -o "${PUID}" -g "${PGID}" "${dir}"
+  if [ ! -f "${cfg}" ]; then
+    cat >"${cfg}" <<'CONFEOF'
+[Preferences]
+WebUI\BypassLocalAuth=true
+WebUI\CSRFProtection=true
+WebUI\ClickjackingProtection=true
+WebUI\HostHeaderValidation=true
+WebUI\HTTPS\Enabled=false
+WebUI\Address=*
+WebUI\ServerDomains=*
+WebUI\Port=${QBT_WEBUI_PORT}
+Connection\UPnP=false
+Connection\UseUPnP=false
+Connection\UseNAT-PMP=false
+Downloads\SavePath=${QBT_SAVE_PATH}
+Downloads\TempPath=${QBT_TEMP_PATH}
+Downloads\TempPathEnabled=true
+CONFEOF
+  fi
+
+  grep -q '^\[Preferences\]' "${cfg}" || printf '\n[Preferences]\n' >> "${cfg}"
+
+  if grep -q '^WebUI\\Username=' "${cfg}"; then
+    sed -i.bak "s#^WebUI\\Username=.*#WebUI\\Username=${QBT_USER}#g" "${cfg}"
+  else
+    printf 'WebUI\\Username=%s\n' "${QBT_USER}" >> "${cfg}"
+  fi
+
+  local pb_line="WebUI\\Password_PBKDF2=\"@ByteArray(${SALT_B64}:${DK_B64})\""
+  if grep -q '^WebUI\\Password_PBKDF2=' "${cfg}"; then
+    sed -i.bak "s#^WebUI\\Password_PBKDF2=.*#${pb_line//#/\\#}#g" "${cfg}"
+  else
+    printf '%s\n' "${pb_line}" >> "${cfg}"
+  fi
+
+  chown "${PUID}:${PGID}" "${cfg}"; chmod 0640 "${cfg}"
+  rm -f "${cfg}.bak" 2>/dev/null || true
+}
+
+seed_qbt_credentials_if_requested() {
   if [ -n "${QBT_USER:-}" ] && [ -n "${QBT_PASS:-}" ]; then
-    if ! openssl version | grep -q 'OpenSSL 3\.'; then
-      warn "OpenSSL 3 required for PBKDF2 password hashing; skipping credential pre-seed"
+    if check_hash_deps; then
+      derive_qbt_hash
+      write_qbt_conf_hash
+      echo "qBittorrent WebUI creds pre-seeded for user '${QBT_USER}' (password hashed)."
+    else
+      echo "Warning: hashing deps missing; will not pre-seed qB credentials. A temporary password will be generated on first start."
       QBT_USER=""
       QBT_PASS=""
-      return
     fi
-    if grep -q '^WebUI\\Username=' "${conf}"; then
-      sed -i "s|^WebUI\\Username=.*|WebUI\\Username=${QBT_USER}|" "${conf}"
-    else
-      echo "WebUI\\Username=${QBT_USER}" >> "${conf}"
-    fi
-    local salt_hex salt_b64 dk_b64 hash_line
-    salt_hex=$(openssl rand -hex 16)
-    dk_b64=$(openssl kdf -binary -keylen 64 PBKDF2 \
-      -kdfopt digest:SHA512 \
-      -kdfopt pass:"${QBT_PASS}" \
-      -kdfopt hexsalt:"${salt_hex}" \
-      -kdfopt iter:100000 | base64 -w0)
-    salt_b64=$(printf "%s" "${salt_hex}" | xxd -r -p | base64 -w0)
-    hash_line="WebUI\\Password_PBKDF2=\"@ByteArray(${salt_b64}:${dk_b64})\""
-    sed -i '/^WebUI\\Password_PBKDF2=/d' "${conf}"
-    echo "${hash_line}" >> "${conf}"
-    chown "${PUID}:${PGID}" "${conf}"; chmod 0640 "${conf}"
-    note "Using provided WebUI credentials: ${QBT_USER} / (hashed password stored)"
+  else
+    echo "No QBT_USER/QBT_PASS provided; will use LSIO temporary password flow."
   fi
 }
 
@@ -927,6 +1004,7 @@ main() {
   write_env
   seed_wireguard_from_conf
   ensure_qbt_conf
+  seed_qbt_credentials_if_requested
   write_compose
   pull_images
   start_with_checks

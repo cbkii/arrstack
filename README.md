@@ -27,11 +27,11 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
   Install Docker & tools (if needed):
   ```bash
   sudo apt update
-  sudo apt install -y docker.io docker-compose-plugin curl wget openssl iproute2
+  sudo apt install -y docker.io docker-compose-plugin curl wget openssl iproute2 xxd
   sudo systemctl enable --now docker
   ```
 
-> Pre-seeding qBittorrent credentials requires **OpenSSL 3** (Ubuntu 22.04+ ships it). If only an older OpenSSL is found, the installer falls back to qBittorrent's temporary password. Setting `QBT_USER`/`QBT_PASS` is optional.
+> Pre-seeding qBittorrent credentials requires **OpenSSL 3** (with `kdf`), `xxd`, and `base64`. If any are missing, the installer falls back to qBittorrent's temporary password. Setting `QBT_USER`/`QBT_PASS` is optional.
 
 ---
 
@@ -53,7 +53,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
    * Defaults live in `arrconf/userconf.defaults.sh`. Copy it to `arrconf/userconf.sh` and edit the values you want to override; the overrides file is sourced on every run so you can adjust it before the first install or later and rerun the script.
   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`, `SERVER_CC_PRIORITY`).
-    * Set `QBT_PASS` in **plain text** – the installer hashes it with PBKDF2 (via OpenSSL 3) before writing `qBittorrent.conf`. If OpenSSL 3 isn't available, the script warns and ignores these values.
+      * Set `QBT_PASS` in **plain text** – the installer hashes it with PBKDF2 (via OpenSSL 3, `xxd`, and `base64`) before writing `qBittorrent.conf`. If the hashing deps are missing, the script warns and ignores these values.
 
    ```bash
    cp arrconf/userconf.defaults.sh arrconf/userconf.sh  # first-time: create overrides
@@ -78,9 +78,9 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.11`):
 
-    * **qBittorrent:** `http://${LAN_IP}:${QBT_HTTP_PORT_HOST}`
-      * If `${QBT_USER}` and `${QBT_PASS}` (plain text) are set and OpenSSL 3 is available, the script hashes the password and you can log in with those credentials.
-      * Otherwise (or if OpenSSL 3 is missing) the installer prints a temporary admin password from the logs; log in as `admin/<printed>` and change it in qBittorrent.
+      * **qBittorrent:** `http://${LAN_IP}:${QBT_HTTP_PORT_HOST}`
+        * If `${QBT_USER}` and `${QBT_PASS}` are set and hashing deps are present (OpenSSL 3 with `kdf`, `xxd`, `base64`), the script hashes the password and you can log in with those credentials.
+        * Otherwise the installer prints a temporary admin password from the logs; log in as `admin/<printed>` and change it in qBittorrent.
      * **Sonarr:** `http://${LAN_IP}:${SONARR_PORT}`
      * **Radarr:** `http://${LAN_IP}:${RADARR_PORT}`
      * **Prowlarr:** `http://${LAN_IP}:${PROWLARR_PORT}`
