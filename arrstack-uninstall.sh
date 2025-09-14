@@ -46,7 +46,7 @@ SUDO=""
 
 confirm() {
   read -r -p "This will REMOVE Arr stack containers, configs and packages. Continue? (y/N) " ans
-  [[ $ans =~ ^[Yy]$ ]] || {
+  [[ "$ans" =~ ^[Yy]$ ]] || {
     note "Aborted"
     exit 0
   }
@@ -55,8 +55,8 @@ confirm() {
 ensure_dirs() { mkdir -p "${BACKUP_SUBDIR}/systemd"; }
 
 find_app_dirs() {
-  local base=$1 depth=${2:-1} APP
-  [[ -d $base ]] || return
+  local base="$1" depth="${2:-1}" APP
+  [[ -d "$base" ]] || return
   for APP in $ALL_CONTAINERS; do
     find "$base" -maxdepth "$depth" -type d -iname "${APP}*" 2>/dev/null
   done
