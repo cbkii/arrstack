@@ -56,7 +56,8 @@ TIMEZONE="Australia/Sydney"
 # Proton defaults and selection
 PROTON_AUTH_FILE="${ARRCONF_DIR}/proton.auth"
 DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
-SERVER_COUNTRIES="Netherlands,Germany,Switzerland,Australia,Spain,United States"
+SERVER_COUNTRIES="Switzerland,Iceland,Sweden,Netherlands" # additional: Romania,Luxembourg
+SERVER_CC_PRIORITY="Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg"
 DEFAULT_COUNTRY="Australia"
 
 # Service/package lists (kept at least as broad as originals)
@@ -85,7 +86,7 @@ export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR LEGACY_VPNCONFS_DIR 
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
-export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
+export DEFAULT_VPN_MODE SERVER_COUNTRIES SERVER_CC_PRIORITY DEFAULT_COUNTRY GLUETUN_API_KEY
 
 # ----------------------------[ LOGGING ]---------------------------------------
 if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
@@ -450,6 +451,7 @@ SUBS_DIR=${SUBS_DIR}
 VPN_MODE=${VPN_MODE}
 VPN_TYPE=${VPN_MODE}
 SERVER_COUNTRIES=${CN}
+SERVER_CC_PRIORITY="${SERVER_CC_PRIORITY}"
 UPDATER_PERIOD=24h
 EOF
   if [[ "${VPN_MODE}" = "openvpn" ]]; then
