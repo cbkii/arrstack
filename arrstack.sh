@@ -22,6 +22,7 @@ LEGACY_CREDS_WG="${LEGACY_VPNCONFS_DIR}/proton-credentials.conf"         # legac
 LAN_IP="192.168.1.50" # set to your host's LAN IP
 GLUETUN_CONTROL_PORT="8000" # Gluetun control server port
 GLUETUN_CONTROL_HOST="127.0.0.1" # Host used for Gluetun control server checks
+GLUETUN_HEALTH_TARGET="1.1.1.1:443" # Health check address for Gluetun
 
 # Media/Downloads layout
 MEDIA_DIR="/media/mediasmb"
@@ -35,7 +36,9 @@ SUBS_DIR="${MEDIA_DIR}/subs"
 QBT_WEBUI_PORT="8080"     # qBittorrent WebUI port inside container
 QBT_HTTP_PORT_HOST="8080" # host port mapped to qBittorrent
 QBT_USER=""
-QBT_PASS=""
+QBT_PASS="" # plain text; requires OpenSSL 3 to hash, else ignored
+QBT_SAVE_PATH="/completed/"          # qBittorrent completed downloads inside container
+QBT_TEMP_PATH="/downloads/incomplete/" # qBittorrent incomplete downloads inside container
 GLUETUN_API_KEY=""
 
 # Service ports (host:container)
@@ -80,7 +83,7 @@ CRITICAL_PORTS="${CRITICAL_PORTS:-${QBT_HTTP_PORT_HOST} ${SONARR_PORT} ${RADARR_
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR LEGACY_VPNCONFS_DIR ARRCONF_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DIR
-export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST PUID PGID TIMEZONE
+export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_MODE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
 
@@ -486,26 +489,72 @@ seed_wireguard_from_conf() {
   fi
 }
 
-# Pre-seed qBittorrent credentials if provided
-preseed_qbt_config() {
-  if [[ -n "$QBT_USER" && -n "$QBT_PASS" ]]; then
-    local cfg="${ARR_DOCKER_DIR}/qbittorrent/qBittorrent.conf"
-    if [[ ! -f "$cfg" ]]; then
-      ensure_dir "$(dirname "$cfg")"
-      local hash
-      hash=$(
-        python3 - <<'PY'
-import os,base64,hashlib
-p=os.environ['QBT_PASS'].encode()
-salt=os.urandom(16)
-dk=hashlib.pbkdf2_hmac('sha512',p,salt,100000,64)
-print('@ByteArray('+base64.b64encode(dk+salt).decode()+')')
-PY
-      )
-      local content="[AutoRun]\nenabled=false\nprogram=\n\n[LegalNotice]\nAccepted=true\n\n[Preferences]\nConnection\\UPnP=false\nConnection\\PortRangeMin=6881\nDownloads\\SavePath=/completed/\nDownloads\\ScanDirsV2=@Variant(\\0\\0\\0\\x1c\\0\\0\\0\\0)\nDownloads\\TempPath=/downloads/incomplete/\nDownloads\\TempPathEnabled=true\nWebUI\\Address=*\nWebUI\\ServerDomains=*\nWebUI\\Username=${QBT_USER}\nWebUI\\Password_PBKDF2=${hash}\n"
-      atomic_write "$cfg" "$content"
-      run_cmd chmod 600 "$cfg"
-      ok "Preseeded qBittorrent credentials"
+ensure_qbt_conf() {
+  local conf_dir="${ARR_DOCKER_DIR}/qbittorrent"
+  local conf="${conf_dir}/qBittorrent.conf"
+  install -d -m 0750 -o "${PUID}" -g "${PGID}" "${conf_dir}"
+  if [ ! -f "${conf}" ]; then
+    cat > "${conf}" <<CONFEOF
+[Preferences]
+# --- WebUI security & LAN behaviour ---
+WebUI\\BypassLocalAuth=true
+WebUI\\CSRFProtection=true
+WebUI\\ClickjackingProtection=true
+WebUI\\HostHeaderValidation=true
+WebUI\\HTTPS\\Enabled=false
+WebUI\\Address=*
+WebUI\\ServerDomains=*
+WebUI\\Port=${QBT_WEBUI_PORT}
+
+# --- Avoid conflicts with Proton NAT-PMP (let Gluetun set the listen port) ---
+Connection\\UPnP=false
+Connection\\UseUPnP=false
+Connection\\UseNAT-PMP=false
+
+# --- Paths inside the container ---
+Downloads\\SavePath=${QBT_SAVE_PATH}
+Downloads\\TempPath=${QBT_TEMP_PATH}
+Downloads\\TempPathEnabled=true
+CONFEOF
+    chown "${PUID}:${PGID}" "${conf}"; chmod 0640 "${conf}"
+  fi
+  if [ -n "${QBT_USER:-}" ] && [ -n "${QBT_PASS:-}" ]; then
+    if ! openssl version | grep -q 'OpenSSL 3\.'; then
+      warn "OpenSSL 3 required for PBKDF2 password hashing; skipping credential pre-seed"
+      QBT_USER=""
+      QBT_PASS=""
+      return
+    fi
+    if grep -q '^WebUI\\Username=' "${conf}"; then
+      sed -i "s|^WebUI\\Username=.*|WebUI\\Username=${QBT_USER}|" "${conf}"
+    else
+      echo "WebUI\\Username=${QBT_USER}" >> "${conf}"
+    fi
+    local salt_hex salt_b64 dk_b64 hash_line
+    salt_hex=$(openssl rand -hex 16)
+    dk_b64=$(openssl kdf -binary -keylen 64 PBKDF2 \
+      -kdfopt digest:SHA512 \
+      -kdfopt pass:"${QBT_PASS}" \
+      -kdfopt hexsalt:"${salt_hex}" \
+      -kdfopt iter:100000 | base64 -w0)
+    salt_b64=$(printf "%s" "${salt_hex}" | xxd -r -p | base64 -w0)
+    hash_line="WebUI\\Password_PBKDF2=\"@ByteArray(${salt_b64}:${dk_b64})\""
+    sed -i '/^WebUI\\Password_PBKDF2=/d' "${conf}"
+    echo "${hash_line}" >> "${conf}"
+    chown "${PUID}:${PGID}" "${conf}"; chmod 0640 "${conf}"
+    note "Using provided WebUI credentials: ${QBT_USER} / (hashed password stored)"
+  fi
+}
+
+print_qbt_temp_password_if_any() {
+  if [ -z "${QBT_USER:-}" ] || [ -z "${QBT_PASS:-}" ]; then
+    sleep 3
+    local tmp_pw
+    tmp_pw="$(docker logs --tail=300 qbittorrent 2>&1 | sed -nE 's/.*temporary password is[: ]+([A-Za-z0-9]+).*/\1/p' | head -n1 || true)"
+    if [ -n "${tmp_pw}" ]; then
+      echo "qBittorrent WebUI → http://${LAN_IP}:${QBT_HTTP_PORT_HOST}"
+      echo "Login: admin / ${tmp_pw}"
+      echo "IMPORTANT: Change this password in qB → Web UI settings."
     fi
   fi
 }
@@ -549,12 +598,19 @@ YAML
       # DNS & stability
       - DOT=off
       - UPDATER_PERIOD=${UPDATER_PERIOD}
-      - HEALTH_TARGET_ADDRESS=1.1.1.1:443
+      - HEALTH_TARGET_ADDRESS=${GLUETUN_HEALTH_TARGET}
       # Control server (RBAC)
-      - HTTP_CONTROL_SERVER_ADDRESS=:${GLUETUN_CONTROL_PORT}
+      - HTTP_CONTROL_SERVER_ADDRESS=${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
-      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -qO- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}},\"use_upnp\":false,\"use_natpmp\":false}" http://${GLUETUN_CONTROL_HOST}:${QBT_WEBUI_PORT}/api/v2/app/setPreferences'
+      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c '\
+          for i in $(seq 1 30); do \
+            wget -qO- --timeout=2 http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/version && break || sleep 1; \
+          done; \
+          wget -qO- --timeout=5 \
+            --header="Referer: http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/" \
+            --post-data "json={\"listen_port\":{{PORTS}},\"use_upnp\":false,\"use_natpmp\":false}" \
+            http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences >/dev/null 2>&1 || exit 0'
       - PUID=${PUID}
       - PGID=${PGID}
     volumes:
@@ -586,8 +642,6 @@ YAML
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TIMEZONE}
-      - QBT_USER=${QBT_USER}
-      - QBT_PASS=${QBT_PASS}
     volumes:
       - ${ARR_DOCKER_DIR}/qbittorrent:/config
       - ${DOWNLOADS_DIR}:/downloads
@@ -596,7 +650,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/version >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -782,16 +836,8 @@ start_with_checks() {
     exit 3
   fi
   compose_cmd up -d qbittorrent prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
-  if [[ -z "${QBT_USER}" || -z "${QBT_PASS}" ]]; then
-    sleep 5
-    local qb_line
-    qb_line="$(docker logs qbittorrent 2>&1 | grep -i password | tail -n 1 || true)"
-    if [[ -n "$qb_line" ]]; then
-      note "qBittorrent initial password: ${qb_line##* }"
-    else
-      warn "Could not determine qBittorrent password; check 'docker logs qbittorrent'"
-    fi
-  else
+  print_qbt_temp_password_if_any
+  if [ -n "${QBT_USER:-}" ] && [ -n "${QBT_PASS:-}" ]; then
     ok "qBittorrent credentials preseeded"
   fi
   compose_cmd ps || true
@@ -854,7 +900,7 @@ main() {
   write_gluetun_auth
   write_env
   seed_wireguard_from_conf
-  preseed_qbt_config
+  ensure_qbt_conf
   write_compose
   pull_images
   start_with_checks
@@ -862,7 +908,7 @@ main() {
   echo
   ok "Done. Next steps:"
   echo "  • Edit ${PROTON_AUTH_FILE} (username WITHOUT +pmp) if you haven't already."
-  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (initial password shown above; set QBT_USER/QBT_PASS before first run to preseed)."
+  echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
 }
 
 main "$@"
