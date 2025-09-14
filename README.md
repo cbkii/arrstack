@@ -76,7 +76,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
      * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **warns if `./arrconf/proton.auth` is missing**.
      * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script adds `+pmp` automatically for OpenVPN port forwarding.
 
-4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
+4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.11`):
 
     * **qBittorrent:** `http://${LAN_IP}:${QBT_HTTP_PORT_HOST}`
       * If `${QBT_USER}` and `${QBT_PASS}` (plain text) are set and OpenSSL 3 is available, the script hashes the password and you can log in with those credentials.
@@ -128,13 +128,13 @@ git commit -m "Ignore userconf.sh; load defaults then overrides"
 * Base: `~/srv`
 * Compose & `.env`: `~/srv/arrstack`
 * App data: `~/srv/docker/<service>`
-* Downloads: `~/downloads` → mounted in qB as `/downloads`
-* Completed: `~/downloads/completed` → `/completed`
+* Downloads: `~/Downloads` → mounted in qB as `/downloads`
+* Completed: `~/Downloads/completed` → `/completed`
 * Media libraries (defaults):
 
-  * TV: `/media/mediasmb/Shows` → `/tv`
-  * Movies: `/media/mediasmb/Movies` → `/movies`
-  * Subs: `/media/mediasmb/subs` → `/subs`
+  * TV: `/media/arrs/shows` → `/tv`
+  * Movies: `/media/arrs/movies` → `/movies`
+  * Subs: `/media/arrs/subs` → `/subs`
 
   In each Arr app, add the **qBittorrent** client and make sure paths match these container paths.
 
@@ -224,7 +224,7 @@ docker compose up -d
 
 ## Ports (host)
 
-All services bind to `LAN_IP` (`192.168.1.50` by default).
+All services bind to `LAN_IP` (`192.168.1.11` by default).
 
 | Service         | Port | Notes                                 |
 | --------------- | ---- | ------------------------------------- |
