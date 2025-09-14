@@ -9,7 +9,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 ## Features
 
-- **Gluetun** (ProtonVPN) with sensible defaults (DoT off, stable health target, PF on).
+- **Gluetun** (ProtonVPN) with sensible defaults (DoT off for compatibility, stable health target, PF on, daily server list updates).
 - **qBittorrent** in Gluetun’s network namespace.
 - **Automatic qBittorrent port sync** via Gluetun’s NAT-PMP hook (no background monitor).
 - **Sonarr, Radarr, Prowlarr, Bazarr, FlareSolverr**.
@@ -49,15 +49,18 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 2. **Review and customise configuration:**
 
    * Open `arrstack.sh` and adjust the variables in the `USER CONFIG` section.
-   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
+   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`).
 
    ```bash
    nano arrstack.sh             # edit configuration
    nano arrstack-uninstall.sh   # optional reset script
    ```
 
-    * Pre-seed proton auth (username on line 1, password on line 2, `chmod 600`) at `~/srv/wg-configs/proton-credentials.conf` to restore automatically.
-    * The emergency fallbackn to wireguard will also look for a server `.conf` in `~/srv/wg-configs/wg*.conf`
+    * Pre-seed Proton auth (username on line 1, password on line 2, `chmod 600`) at `~/srv/wg-configs/proton-credentials.conf` to restore automatically.
+    * Proton port forwarding requires the OpenVPN username to end with **`+pmp`** (the installer auto-appends).
+    * Provider mode means no `.ovpn` file is needed – `VPN_SERVICE_PROVIDER=protonvpn` handles Proton configs. Drop `.ovpn` files only when using a custom provider.
+    * The emergency fallback to wireguard will also look for a server `.conf` in `~/srv/wg-configs/wg*.conf`.
+    * LinuxServer/qB requires the mapped port and `WEBUI_PORT` to match; editing `QBT_WEBUI_PORT` updates the compose mapping, container setting, healthcheck and port-forward hook together.
 
 3. **Run it** as your normal user:
 
@@ -66,7 +69,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    ```
 
      * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **prompts for ProtonVPN credentials** if `~/srv/docker/gluetun/proton-credentials.conf` is missing. 
-     * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script handles `+pmp` automatically for OpenVPN PF.
+     * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script adds `+pmp` automatically for OpenVPN port forwarding.
 
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
 
@@ -77,7 +80,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
      * **Bazarr:** `http://<LAN_IP>:6767`
      * **Gluetun API:** `http://<LAN_IP>:8000` (Basic auth user `gluetun`, password from `.env` `GLUETUN_API_KEY`)
 
-     > All UIs are exposed via the Gluetun service and bound to `LAN_IP`. Set `LAN_IP` at the top of `arrstack.sh` (e.g. `127.0.0.1` for localhost-only or another LAN address to expose to your network).
+    > All UIs are exposed via the Gluetun service and bound to `LAN_IP`. Set `LAN_IP` at the top of `arrstack.sh` (e.g. `${GLUETUN_CONTROL_HOST}` for local-only or another LAN address to expose to your network). If you set `LAN_IP=0.0.0.0` to expose beyond your LAN, front the Gluetun control server with TLS and a strong auth proxy.
 
      > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
 
@@ -146,7 +149,7 @@ If you want to enable the fallback to wireguard, download a Proton **WireGuard**
 ## Update the stack
 
 The installer is safe to re-run; it will pull new images and start cleanly.
-Gluetun’s built-in updater is disabled (`UPDATER_PERIOD=`). Refresh server data by pulling a new image or temporarily setting `UPDATER_PERIOD=24h` in the `.env` file.
+Gluetun’s server list updater runs daily (`UPDATER_PERIOD=24h`). Adjust or disable it in the `.env` file if desired.
 For a **full reset**, run `arrstack-uninstall.sh` (backups to `~/srv/backups/`) and then reinstall.
 
 ```bash
@@ -188,10 +191,10 @@ All services bind to `LAN_IP` (`192.168.1.50` by default).
 * **Forwarded port (OpenVPN):** `curl -u gluetun:<GLUETUN_API_KEY> http://${LAN_IP}:8000/v1/openvpn/portforwarded`
 * **Force qB to current PF:** `pvpn portsync`
 * **MTU issues (WireGuard):** lower `WIREGUARD_MTU` in `.env` from `1320` to `1280` or `1200`.
-* **DNS issues:** DoT is disabled by default (`DOT=off` in `.env`).
+* **DNS issues:** Gluetun uses DNS over TLS by default; `DOT=off` trades privacy for compatibility.
 * **Re-seed Proton creds:** copy fresh files to `${PROTON_CREDS_FBAK}` and re-run the installer.
 
-To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `127.0.0.1` for localhost or `0.0.0.0` for all) and rerun:
+To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `${GLUETUN_CONTROL_HOST}` for local-only or `0.0.0.0` for all) and rerun:
 
 ```bash
 ~/srv/arrstackrepo/arrstack.sh
