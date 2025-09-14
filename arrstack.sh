@@ -242,16 +242,18 @@ final_docker_cleanup() {
 # ---------------------------[ ARRCONF SECRETS ]--------------------------------
 harden_arrconf() {
   ensure_dir "${ARRCONF_DIR}"
-  local changed=0
-  if [[ $(stat -c '%a' "${ARRCONF_DIR}" 2>/dev/null) != "700" ]]; then
-    run_cmd chmod 700 "${ARRCONF_DIR}"
+  local changed=0 perm
+  perm=$(stat -c '%a' "${ARRCONF_DIR}" 2>/dev/null || echo "")
+  if [[ "$perm" != "700" ]]; then
+    run_cmd chmod 700 "${ARRCONF_DIR}" || run_cmd sudo chmod 700 "${ARRCONF_DIR}" || true
     changed=1
   fi
   shopt -s nullglob
   for f in "${ARRCONF_DIR}"/proton.auth "${ARRCONF_DIR}"/wg*.conf; do
     [[ -e "$f" ]] || continue
-    if [[ $(stat -c '%a' "$f" 2>/dev/null) != "600" ]]; then
-      run_cmd chmod 600 "$f"
+    perm=$(stat -c '%a' "$f" 2>/dev/null || echo "")
+    if [[ "$perm" != "600" ]]; then
+      run_cmd chmod 600 "$f" || run_cmd sudo chmod 600 "$f" || true
       changed=1
     fi
   done
@@ -276,7 +278,7 @@ ensure_proton_auth() {
   else
     ok "Found ${PROTON_AUTH_FILE}"
   fi
-  run_cmd chmod 600 "${PROTON_AUTH_FILE}"
+  run_cmd chmod 600 "${PROTON_AUTH_FILE}" || run_cmd sudo chmod 600 "${PROTON_AUTH_FILE}" || true
 }
 ensure_pmp() {
   local u="$1"
