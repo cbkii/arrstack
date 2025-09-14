@@ -863,4 +863,19 @@ main() {
   echo "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
 }
 
+LOG_FILE="${ARR_STACK_DIR}/arrstack-install.log"
+mkdir -p "${ARR_STACK_DIR}"
+exec 3>&1 4>&2
+exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2)
+set -x
+cleanup() {
+  local status=$?
+  set +x
+  exec 1>&3 2>&4
+  echo "Detailed log saved to ${LOG_FILE} (last 1888 lines):"
+  tail -n 1888 "${LOG_FILE}"
+  exit "$status"
+}
+trap cleanup EXIT
+
 main "$@"
