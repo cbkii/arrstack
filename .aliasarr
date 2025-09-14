@@ -44,6 +44,7 @@ PROWLARR_PORT="$(_arr_get PROWLARR_PORT)"; [[ -n "$PROWLARR_PORT" ]] || PROWLARR
 BAZARR_PORT="$(_arr_get BAZARR_PORT)"; [[ -n "$BAZARR_PORT" ]] || BAZARR_PORT=6767
 FLARESOLVERR_PORT="$(_arr_get FLARESOLVERR_PORT)"; [[ -n "$FLARESOLVERR_PORT" ]] || FLARESOLVERR_PORT=8191
 SERVER_COUNTRIES="$(_arr_get SERVER_COUNTRIES)"
+export SERVER_COUNTRIES
 SERVER_CC_PRIORITY="$(_arr_get SERVER_CC_PRIORITY)"
 
 # Known services in this project (compose names)
@@ -58,11 +59,13 @@ arr.ps()       { _arr_dc ps; }
   # shellcheck disable=SC2015
   arr.logs()     { local s="${1:-}"; shift || true; [[ -n "$s" ]] && _arr_dc logs -f --tail=200 "$s" "$@" || _arr_dc logs -f --tail=100; }
 arr.tail()     { arr.logs "$@"; }
-arr.stats()    { docker stats --no-stream $(printf "%s " "${ARR_SERVICES[@]}") 2>/dev/null || true; }
+arr.stats()    { docker stats --no-stream "${ARR_SERVICES[@]}" 2>/dev/null || true; }
 arr.shell()    { local s="${1:?service}"; docker exec -it "$s" /bin/bash 2>/dev/null || docker exec -it "$s" /bin/sh; }
 arr.health()   { for s in "${ARR_SERVICES[@]}"; do printf "%-14s : %s\n" "$s" "$(docker inspect --format '{{.State.Health.Status}}' "$s" 2>/dev/null || echo n/a)"; done; }
 arr.backup()   {
-  local src="$ARR_DOCKER_DIR" dst="$ARR_BACKUP_DIR/cli-$(_arr_now)"
+  local src="$ARR_DOCKER_DIR"
+  local dst
+  dst="$ARR_BACKUP_DIR/cli-$(_arr_now)"
   mkdir -p "$dst"
   for s in "${ARR_SERVICES[@]}"; do
     local dir="$src/$s" out="$dst/${s}-config.tgz"
@@ -200,7 +203,7 @@ arr_vpn_country() {
   local candidates=()
   if [ -n "$cc" ]; then candidates+=("$cc"); fi
   for c in "${cc_list[@]}"; do
-    [[ " ${candidates[*]} " =~ " $c " ]] || candidates+=("$c")
+    [[ " ${candidates[*]} " == *" $c "* ]] || candidates+=("$c")
   done
   for cand in "${candidates[@]}"; do
     _arr_vpn_switch "$cand" && return 0
@@ -217,7 +220,7 @@ arr_vpn_fastest() {
   local server_list
   server_list="$(arr_vpn_servers 2>/dev/null || true)"
   for cc in "${cc_list[@]}"; do
-    [ $tested -ge $limit ] && break
+    [ "$tested" -ge "$limit" ] && break
     if [ -n "$server_list" ] && ! echo "$server_list" | grep -Fxq "$cc"; then
       continue
     fi
