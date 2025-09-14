@@ -4,79 +4,30 @@
 # =============================================================================
 set -euo pipefail
 
-# ----------------------------[ USER CONFIG ]-----------------------------------
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-USER_NAME="${USER:-$(id -un)}"
-ARR_BASE="/home/${USER_NAME}/srv"
-ARR_DOCKER_DIR="${ARR_BASE}/docker"
-ARR_STACK_DIR="${ARR_BASE}/arrstack"
-ARR_BACKUP_DIR="${ARR_BASE}/backups"
-ARRCONF_DIR="${REPO_ROOT}/arrconf"
+# Resolve repo root if not already set
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
-# Legacy secrets paths (auto-migrated on first run)
-LEGACY_VPNCONFS_DIR="${ARR_BASE}/wg-configs"     # legacy Proton WG config directory
-LEGACY_CREDS_DOCKER="${ARR_DOCKER_DIR}/gluetun/proton-credentials.conf" # legacy OpenVPN creds
-LEGACY_CREDS_WG="${LEGACY_VPNCONFS_DIR}/proton-credentials.conf"         # legacy WG creds
-
-# Local IP for binding services
-LAN_IP="192.168.1.50" # set to your host's LAN IP
-GLUETUN_CONTROL_PORT="8000" # Gluetun control server port
-GLUETUN_CONTROL_HOST="127.0.0.1" # Host used for Gluetun control server checks
-GLUETUN_HEALTH_TARGET="1.1.1.1:443" # Health check address for Gluetun
-
-# Media/Downloads layout
-MEDIA_DIR="/media/mediasmb"
-DOWNLOADS_DIR="/home/${USER_NAME}/downloads"
-COMPLETED_DIR="${DOWNLOADS_DIR}/completed"
-MOVIES_DIR="${MEDIA_DIR}/Movies"
-TV_DIR="${MEDIA_DIR}/Shows"
-SUBS_DIR="${MEDIA_DIR}/subs"
-
-# qBittorrent UI credentials/ports
-QBT_WEBUI_PORT="8080"     # qBittorrent WebUI port inside container
-QBT_HTTP_PORT_HOST="8080" # host port mapped to qBittorrent
-QBT_USER=""
-QBT_PASS="" # plain text; requires OpenSSL 3 to hash, else ignored
-QBT_SAVE_PATH="/completed/"          # qBittorrent completed downloads inside container
-QBT_TEMP_PATH="/downloads/incomplete/" # qBittorrent incomplete downloads inside container
-GLUETUN_API_KEY=""
-
-# Service ports (host:container)
-SONARR_PORT="8989"
-RADARR_PORT="7878"
-PROWLARR_PORT="9696"
-BAZARR_PORT="6767"
-FLARESOLVERR_PORT="8191"
-
-# Identity & timezone
-PUID="$(id -u)"
-PGID="$(id -g)"
-TIMEZONE="Australia/Sydney"
-
-# Proton defaults and selection
-PROTON_AUTH_FILE="${ARRCONF_DIR}/proton.auth"
-DEFAULT_VPN_MODE="openvpn" # openvpn (preferred) | wireguard (fallback)
-SERVER_COUNTRIES="Switzerland,Iceland,Sweden,Netherlands" # additional: Romania,Luxembourg
-SERVER_CC_PRIORITY="Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg"
-DEFAULT_COUNTRY="Australia"
-
-# Service/package lists (kept at least as broad as originals)
-ALL_CONTAINERS="gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr"
-ALL_NATIVE_SERVICES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common"
-ALL_PACKAGES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common"
-
-# Runtime flags
-DRY_RUN="${DRY_RUN:-0}"
-DEBUG="${DEBUG:-0}"
-NO_COLOR="${NO_COLOR:-0}"
-VPN_MODE="${DEFAULT_VPN_MODE}"
-
-# Source optional user overrides
-USER_CONF="${ARRCONF_DIR}/userconf.sh"
-if [[ -f "${USER_CONF}" ]]; then
+# 1) Load tracked defaults
+if [ -f "${REPO_ROOT}/arrconf/userconf.defaults.sh" ]; then
   # shellcheck source=/dev/null
-  . "${USER_CONF}"
+  . "${REPO_ROOT}/arrconf/userconf.defaults.sh"
 fi
+
+# 2) Load user overrides (untracked)
+if [ -f "${REPO_ROOT}/arrconf/userconf.sh" ]; then
+  # shellcheck source=/dev/null
+  . "${REPO_ROOT}/arrconf/userconf.sh"
+fi
+
+# shellcheck source=/dev/null
+[ -f "${REPO_ROOT}/arrconf/helpers.sh" ] && . "${REPO_ROOT}/arrconf/helpers.sh"
+
+case "${1:-}" in
+  conf-diff)
+    arrconf_diff
+    exit $?
+    ;;
+esac
 
 # Critical host ports we may free up (recomputed after overrides)
 CRITICAL_PORTS="${CRITICAL_PORTS:-${QBT_HTTP_PORT_HOST} ${SONARR_PORT} ${RADARR_PORT} ${PROWLARR_PORT} ${BAZARR_PORT} ${FLARESOLVERR_PORT} ${GLUETUN_CONTROL_PORT}}"
@@ -87,7 +38,6 @@ export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MEDIA_DIR MOVIES_DIR TV_DIR SUBS_DI
 export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_MODE SERVER_COUNTRIES SERVER_CC_PRIORITY DEFAULT_COUNTRY GLUETUN_API_KEY
-
 # ----------------------------[ LOGGING ]---------------------------------------
 if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
   C_RESET='\033[0m'

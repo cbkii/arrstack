@@ -51,14 +51,14 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 2. **Review and customise configuration:**
 
-   * Defaults live in the `USER CONFIG` section of `arrstack.sh`. To keep the installer clean, override any of these settings in `arrconf/userconf.sh` by uncommenting the lines you need; the file is sourced on every run so you can adjust it before the first install or later and rerun the script.
+   * Defaults live in `arrconf/userconf.defaults.sh`. Copy it to `arrconf/userconf.sh` and edit the values you want to override; the overrides file is sourced on every run so you can adjust it before the first install or later and rerun the script.
   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`, `SERVER_CC_PRIORITY`).
     * Set `QBT_PASS` in **plain text** – the installer hashes it with PBKDF2 (via OpenSSL 3) before writing `qBittorrent.conf`. If OpenSSL 3 isn't available, the script warns and ignores these values.
 
    ```bash
-   nano arrconf/userconf.sh     # uncomment overrides
-   nano arrstack.sh             # view all defaults
-   nano arrstack-uninstall.sh   # optional reset script
+   cp arrconf/userconf.defaults.sh arrconf/userconf.sh  # first-time: create overrides
+   nano arrconf/userconf.sh                             # edit overrides
+   nano arrstack-uninstall.sh                           # optional reset script
    ```
 
     * Place Proton credentials in `./arrconf/proton.auth` (two lines: `PROTON_USER=...` and `PROTON_PASS=...`). Keep the folder `chmod 700` and the file `chmod 600`.
@@ -76,7 +76,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
      * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **warns if `./arrconf/proton.auth` is missing**.
      * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script adds `+pmp` automatically for OpenVPN port forwarding.
 
-4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.50`):
+4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.11`):
 
     * **qBittorrent:** `http://${LAN_IP}:${QBT_HTTP_PORT_HOST}`
       * If `${QBT_USER}` and `${QBT_PASS}` (plain text) are set and OpenSSL 3 is available, the script hashes the password and you can log in with those credentials.
@@ -97,6 +97,30 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
     > Tip: After you log in, change the generated password. UPnP/NAT-PMP is disabled automatically.
 
+### Config files
+
+- `arrconf/userconf.defaults.sh` — **tracked defaults** (updated by repo on pull).
+- `arrconf/userconf.sh` — **your local overrides** (NOT tracked).
+
+The launcher loads defaults first, then your overrides:
+1. `arrconf/userconf.defaults.sh`
+2. `arrconf/userconf.sh` (if present)
+
+To see what changed after updates:
+    ./arrstack.sh conf-diff
+If you don’t have a `userconf.sh` yet, the tool will offer to create it from the defaults.
+
+#### One-time migration (if your userconf.sh is tracked)
+
+```bash
+git mv arrconf/userconf.sh arrconf/userconf.defaults.sh
+git commit -m "Track defaults; make userconf.sh user-local"
+cp arrconf/userconf.defaults.sh arrconf/userconf.sh
+printf "arrconf/userconf.sh\n" >> .gitignore
+git add .gitignore arrconf/userconf.defaults.sh
+git commit -m "Ignore userconf.sh; load defaults then overrides"
+```
+
 ---
 
 ## Default folders & mapping
@@ -104,13 +128,13 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 * Base: `~/srv`
 * Compose & `.env`: `~/srv/arrstack`
 * App data: `~/srv/docker/<service>`
-* Downloads: `~/downloads` → mounted in qB as `/downloads`
-* Completed: `~/downloads/completed` → `/completed`
+* Downloads: `~/Downloads` → mounted in qB as `/downloads`
+* Completed: `~/Downloads/completed` → `/completed`
 * Media libraries (defaults):
 
-  * TV: `/media/mediasmb/Shows` → `/tv`
-  * Movies: `/media/mediasmb/Movies` → `/movies`
-  * Subs: `/media/mediasmb/subs` → `/subs`
+  * TV: `/media/arrs/shows` → `/tv`
+  * Movies: `/media/arrs/movies` → `/movies`
+  * Subs: `/media/arrs/subs` → `/subs`
 
   In each Arr app, add the **qBittorrent** client and make sure paths match these container paths.
 
@@ -200,7 +224,7 @@ docker compose up -d
 
 ## Ports (host)
 
-All services bind to `LAN_IP` (`192.168.1.50` by default).
+All services bind to `LAN_IP` (`192.168.1.11` by default).
 
 | Service         | Port | Notes                                 |
 | --------------- | ---- | ------------------------------------- |
