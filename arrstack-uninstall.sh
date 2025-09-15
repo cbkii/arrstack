@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Euo pipefail
+IFS=$'\n\t'
 
 # ------------------------------------------------------------
 # ARR stack uninstaller / cleanup
@@ -35,11 +36,32 @@ ALL_NATIVE_SERVICES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbitto
 ALL_PACKAGES="sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent qbittorrent-nox transmission-daemon transmission-common"
 CRITICAL_PORTS="${QBT_HTTP_PORT_HOST} ${SONARR_PORT} ${RADARR_PORT} ${PROWLARR_PORT} ${BAZARR_PORT} ${FLARESOLVERR_PORT} ${GLUETUN_CONTROL_PORT}"
 
+if [[ "${NO_COLOR:-0}" -eq 0 && -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_GREEN=$'\033[32m'
+  C_BLUE=$'\033[36m'
+  C_YELLOW=$'\033[33m'
+  C_RED=$'\033[31m'
+else
+  C_RESET=''
+  C_BOLD=''
+  C_GREEN=''
+  C_BLUE=''
+  C_YELLOW=''
+  C_RED=''
+fi
+
+warn() { printf '%b\n' "${C_YELLOW}⚠ $1${C_RESET}" >&2; }
+die() {
+  printf '%b\n' "${C_RED}✖ $1${C_RESET}" >&2
+  exit 1
+}
+
 # ----- logging helpers -------------------------------------------------------
-step() { printf '\n\033[1;36m== %s ==\033[0m\n' "$1"; }
-note() { printf '\033[0;36m- %s\033[0m\n' "$1"; }
-ok() { printf '\033[0;32m✔ %s\033[0m\n' "$1"; }
-warn() { printf '\033[0;33m⚠ %s\033[0m\n' "$1"; }
+step() { printf '\n%s%s== %s ==%s\n' "$C_BOLD" "$C_BLUE" "$1" "$C_RESET"; }
+note() { printf '%s- %s%s\n' "$C_BLUE" "$1" "$C_RESET"; }
+ok() { printf '%s✔ %s%s\n' "$C_GREEN" "$1" "$C_RESET"; }
 
 SUDO=""
 [[ $EUID -ne 0 ]] && SUDO="sudo"

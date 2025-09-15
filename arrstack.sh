@@ -2,7 +2,8 @@
 # =============================================================================
 #  ARR+VPN STACK INSTALLER
 # =============================================================================
-set -euo pipefail
+set -Euo pipefail
+IFS=$'\n\t'
 
 # Resolve repo root if not already set
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -19,8 +20,92 @@ if [ -f "${REPO_ROOT}/arrconf/userconf.sh" ]; then
   . "${REPO_ROOT}/arrconf/userconf.sh"
 fi
 
-# shellcheck source=/dev/null
-[ -f "${REPO_ROOT}/arrconf/helpers.sh" ] && . "${REPO_ROOT}/arrconf/helpers.sh"
+LOG_FILE=${LOG_FILE:-/dev/null}
+if [[ "${NO_COLOR:-0}" -eq 0 && -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_GREEN=$'\033[32m'
+  C_BLUE=$'\033[36m'
+  C_YELLOW=$'\033[33m'
+  C_RED=$'\033[31m'
+else
+  C_RESET=''
+  C_BOLD=''
+  C_GREEN=''
+  C_BLUE=''
+  C_YELLOW=''
+  C_RED=''
+fi
+
+warn() { printf '%b\n' "${C_YELLOW}⚠ $1${C_RESET}" >&2; }
+die() {
+  printf '%b\n' "${C_RED}✖ $1${C_RESET}" >&2
+  exit 1
+}
+
+is_dry() { [[ "${DRY_RUN:-0}" == 1 ]]; }
+
+_redact() {
+  sed -E \
+    -e 's/(GLUETUN_API_KEY=)[^ ]+/\1<REDACTED>/g' \
+    -e 's/(OPENVPN_PASSWORD=)[^ ]+/\1<REDACTED>/g' \
+    -e 's/(OPENVPN_USER=)[^ ]+/\1<REDACTED>/g'
+}
+
+_log_cmd() {
+  local -a argv=("$@")
+  {
+    printf '+'
+    for a in "${argv[@]}"; do printf ' %q' "$a"; done
+    printf '\n'
+  } | _redact >>"$LOG_FILE"
+}
+
+run() {
+  local -a argv=("$@")
+  if is_dry; then
+    _log_cmd "${argv[@]}"
+    return 0
+  fi
+  _log_cmd "${argv[@]}"
+  "${argv[@]}"
+  return $?
+}
+
+run_or_warn() {
+  local -a argv=("$@")
+  if is_dry; then
+    _log_cmd "${argv[@]}"
+    return 0
+  fi
+  _log_cmd "${argv[@]}"
+  "${argv[@]}"
+  local rc=$?
+  ((rc == 0)) || warn "Command failed ($rc): ${argv[*]}"
+  return $rc
+}
+
+require_env() {
+  local var=$1
+  [[ -n "${!var:-}" ]] || die "Missing env var: ${var}"
+}
+
+arrconf_diff() {
+  local def="${REPO_ROOT}/arrconf/userconf.defaults.sh"
+  local usr="${REPO_ROOT}/arrconf/userconf.sh"
+  if [ ! -f "${def}" ]; then
+    echo "Defaults not found at ${def}" >&2
+    return 1
+  fi
+  if [ ! -f "${usr}" ]; then
+    echo "No userconf.sh yet. Creating from defaults..."
+    cp "${def}" "${usr}"
+    echo "Edit ${usr} to override defaults."
+    return 0
+  fi
+  echo "Comparing your overrides to new defaults:"
+  diff -u "${def}" "${usr}" || true
+}
 
 case "${1:-}" in
   conf-diff)
@@ -42,22 +127,6 @@ export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEM
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_MODE SERVER_COUNTRIES SERVER_CC_PRIORITY DEFAULT_COUNTRY GLUETUN_API_KEY
 # ----------------------------[ LOGGING ]---------------------------------------
-if [[ "${NO_COLOR}" -eq 0 && -t 1 ]]; then
-  C_RESET='\033[0m'
-  C_BOLD='\033[1m'
-  C_RED='\033[31m'
-  C_GREEN='\033[32m'
-  C_YELLOW='\033[33m'
-  C_BLUE='\033[36m'
-else
-  C_RESET=''
-  C_BOLD=''
-  C_RED=''
-  C_GREEN=''
-  C_YELLOW=''
-  C_BLUE=''
-fi
-
 ts() {
   local now diff
   now=$(date +%s)
@@ -73,64 +142,9 @@ out() {
 step() { out "$(ts) ${C_BLUE}${C_BOLD}✴️ $1${C_RESET}"; }
 note() { out "$(ts) ${C_BLUE}➤ $1${C_RESET}"; }
 ok() { out "$(ts) ${C_GREEN}✔ $1${C_RESET}"; }
-warn() { out "$(ts) ${C_YELLOW}⚠ $1${C_RESET}"; }
-err() { out "$(ts) ${C_RED}✖ $1${C_RESET}"; }
-die() {
-  err "$1"
-  exit 1
-}
 
 # shellcheck disable=SC2015
 trace() { [ "$DEBUG" = "1" ] && printf "[trace] %s\n" "$1" >>"${LOG_FILE}" || true; }
-is_dry() { [[ "$DRY_RUN" = "1" ]]; }
-
-show_spinner() {
-  local pid=$1 spin=$'|/-\\' i=0
-  while kill -0 "$pid" 2>/dev/null; do
-    printf '\r%s' "${spin:i++%4:1}" >&3
-    sleep 0.1
-  done
-  printf '\r\033[K' >&3
-}
-
-run_cmd() {
-  local spinner=0
-  if [[ "${1:-}" = '--spinner' ]]; then
-    spinner=1
-    shift
-  fi
-
-  # Preserve arguments to avoid word splitting/globbing
-  local -a cmd=("$@")
-  if is_dry; then
-    note "[DRY] $(printf '%q ' "${cmd[@]}")"
-    return 0
-  fi
-
-  {
-    printf '+ '
-    printf '%q ' "${cmd[@]}"
-    printf '\n'
-  } >>"${LOG_FILE}"
-
-  local status
-  set +e
-  if [[ $spinner -eq 1 ]]; then
-    "${cmd[@]}" &
-    local pid=$!
-    show_spinner "$pid"
-    wait "$pid"
-    status=$?
-  else
-    "${cmd[@]}"
-    status=$?
-  fi
-  set -e
-  if [[ $status -ne 0 ]]; then
-    warn "Command failed ($status): $(printf '%q ' "${cmd[@]}")"
-  fi
-  return $status
-}
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -177,8 +191,8 @@ check_deps() {
   command -v xxd >/dev/null 2>&1 || pkgs+=(xxd)
   if ((${#pkgs[@]})); then
     note "Installing packages: ${pkgs[*]}"
-    run_cmd --spinner sudo apt-get update -y || true
-    run_cmd --spinner sudo apt-get install -y "${pkgs[@]}" || true
+    run_or_warn sudo apt-get update -y
+    run_or_warn sudo apt-get install -y "${pkgs[@]}"
   fi
 
   for b in docker wget curl ss openssl xxd; do
@@ -190,18 +204,13 @@ check_deps() {
 
 # ----------------------------[ CLEANUP PHASE ]---------------------------------
 compose_cmd() {
-  local run_opts=()
-  if [[ ${1:-} == '--spinner' ]]; then
-    run_opts+=(--spinner)
-    shift
-  fi
-  run_cmd "${run_opts[@]}" docker compose --env-file "$ARR_ENV_FILE" -f "${ARR_STACK_DIR}/docker-compose.yml" "$@"
+  run docker compose --env-file "$ARR_ENV_FILE" -f "${ARR_STACK_DIR}/docker-compose.yml" "$@"
 }
 
 stop_stack_if_present() {
   step "2/15 Stopping any existing stack"
   if [[ -f "${ARR_STACK_DIR}/docker-compose.yml" && -f "${ARR_ENV_FILE}" ]]; then
-    compose_cmd --spinner down || true
+    run_or_warn compose_cmd down
   else
     note "No existing stack to stop"
   fi
@@ -209,13 +218,13 @@ stop_stack_if_present() {
 stop_named_containers() {
   note "Removing known containers"
   # shellcheck disable=SC2015
-  for c in ${ALL_CONTAINERS}; do docker ps -a --format '{{.Names}}' | grep -q "^${c}$" && run_cmd docker rm -f "$c" || true; done
+  for c in ${ALL_CONTAINERS}; do docker ps -a --format '{{.Names}}' | grep -q "^${c}$" && run_or_warn docker rm -f "$c"; done
 }
 clear_port_conflicts() {
   note "Clearing port conflicts"
   for p in ${CRITICAL_PORTS}; do if sudo fuser "${p}/tcp" >/dev/null 2>&1; then
     warn "Killing process on :$p"
-    run_cmd sudo fuser -k "${p}/tcp" || true
+    run_or_warn sudo fuser -k "${p}/tcp"
   fi; done
 }
 stop_native_services() {
@@ -223,26 +232,26 @@ stop_native_services() {
   for SVC in ${ALL_NATIVE_SERVICES}; do
     if systemctl list-units --all --type=service | grep -q "${SVC}.service"; then
       note "Stopping ${SVC}…"
-      run_cmd sudo systemctl stop "${SVC}" || true
-      run_cmd sudo systemctl disable "${SVC}" || true
-      run_cmd sudo systemctl mask "${SVC}" || true
+      run_or_warn sudo systemctl stop "${SVC}"
+      run_or_warn sudo systemctl disable "${SVC}"
+      run_or_warn sudo systemctl mask "${SVC}"
     fi
   done
-  run_cmd sudo systemctl daemon-reload || true
+  run_or_warn sudo systemctl daemon-reload
 }
 fix_permissions_on_base() {
   note "Fixing permissions under ${ARR_BASE}"
   if [[ -d "${ARR_BASE}" ]]; then
     note "Removing root-owned Docker artefacts (logs/pids/locks/servers.json)"
-    run_cmd sudo find "${ARR_BASE}" -name "servers.json" -exec rm -f {} \; 2>/dev/null || true
-    run_cmd sudo find "${ARR_BASE}" -name "*.log" -path "*/gluetun/*" -exec rm -f {} \; 2>/dev/null || true
-    run_cmd sudo find "${ARR_BASE}" -name "*.pid" -exec rm -f {} \; 2>/dev/null || true
-    run_cmd sudo find "${ARR_BASE}" -name "*.lock" -exec rm -f {} \; 2>/dev/null || true
+    run_or_warn sudo find "${ARR_BASE}" -name "servers.json" -exec rm -f {} \; 2>/dev/null
+    run_or_warn sudo find "${ARR_BASE}" -name "*.log" -path "*/gluetun/*" -exec rm -f {} \; 2>/dev/null
+    run_or_warn sudo find "${ARR_BASE}" -name "*.pid" -exec rm -f {} \; 2>/dev/null
+    run_or_warn sudo find "${ARR_BASE}" -name "*.lock" -exec rm -f {} \; 2>/dev/null
     note "chown -R ${USER_NAME}:${USER_NAME} ${ARR_BASE}"
-    run_cmd sudo chown -R "${USER_NAME}:${USER_NAME}" "${ARR_BASE}" 2>/dev/null || true
+    run_or_warn sudo chown -R "${USER_NAME}:${USER_NAME}" "${ARR_BASE}" 2>/dev/null
     note "Standardising directory/file permissions"
-    run_cmd find "${ARR_BASE}" -type d -exec chmod 755 {} \; 2>/dev/null || true
-    run_cmd find "${ARR_BASE}" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    run_or_warn find "${ARR_BASE}" -type d -exec chmod 755 {} \; 2>/dev/null
+    run_or_warn find "${ARR_BASE}" -type f -exec chmod 644 {} \; 2>/dev/null
   fi
 }
 clean_targeted_volumes() {
@@ -267,14 +276,14 @@ backup_configs() {
   # Docker configs
   for APP in qbittorrent sonarr radarr prowlarr bazarr jackett lidarr readarr transmission gluetun flaresolverr; do
     if [[ -d "${ARR_DOCKER_DIR}/${APP}" ]]; then
-      run_cmd tar -C "${ARR_DOCKER_DIR}" -czf "${BACKUP_SUBDIR}/docker-${APP}-config.tgz" "${APP}" 2>/dev/null || true
+      run_or_warn tar -C "${ARR_DOCKER_DIR}" -czf "${BACKUP_SUBDIR}/docker-${APP}-config.tgz" "${APP}" 2>/dev/null
       note "Saved ${BACKUP_SUBDIR}/docker-${APP}-config.tgz"
     fi
   done
   # Home configs
   for APP in qBittorrent Sonarr Radarr Prowlarr Bazarr Jackett Lidarr Readarr transmission; do
     if [[ -d "${HOME}/.config/${APP}" ]]; then
-      run_cmd tar -C "${HOME}/.config" -czf "${BACKUP_SUBDIR}/home-${APP}-config.tgz" "${APP}" 2>/dev/null || true
+      run_or_warn tar -C "${HOME}/.config" -czf "${BACKUP_SUBDIR}/home-${APP}-config.tgz" "${APP}" 2>/dev/null
       note "Saved ${BACKUP_SUBDIR}/home-${APP}-config.tgz"
     fi
   done
@@ -284,7 +293,7 @@ backup_configs() {
 /etc/transmission-daemon"
   for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then
     APP_NAME="$(basename "$D")"
-    run_cmd sudo tar -czf "${BACKUP_SUBDIR}/system-${APP_NAME}.tgz" "$D" 2>/dev/null || true
+    run_or_warn sudo tar -czf "${BACKUP_SUBDIR}/system-${APP_NAME}.tgz" "$D" 2>/dev/null
     note "Saved ${BACKUP_SUBDIR}/system-${APP_NAME}.tgz"
   fi; done
   echo "${NATIVE_DIRS}" >"${BACKUP_SUBDIR}/_native_dirs.list"
@@ -295,25 +304,25 @@ move_native_dirs() {
   local NATIVE_MOVE_DIR="${BACKUP_SUBDIR}/native-configs"
   ensure_dir "${NATIVE_MOVE_DIR}"
   for D in ${NATIVE_DIRS}; do if [[ -d "$D" ]]; then
-    run_cmd sudo mv "$D" "${NATIVE_MOVE_DIR}/$(basename "$D")" 2>/dev/null || true
+    run_or_warn sudo mv "$D" "${NATIVE_MOVE_DIR}/$(basename "$D")" 2>/dev/null
     note "Moved $D -> ${NATIVE_MOVE_DIR}/$(basename "$D")"
   fi; done
 }
 purge_native_packages() {
   step "6/15 Purging ALL native packages"
-  run_cmd --spinner sudo apt-get update -y || true
+  run_or_warn sudo apt-get update -y
   for PKG in ${ALL_PACKAGES}; do if dpkg -l | grep -q "^ii.*${PKG}"; then
     note "Purging ${PKG}…"
-    run_cmd sudo apt-get purge -y "${PKG}" || true
+    run_or_warn sudo apt-get purge -y "${PKG}"
   fi; done
-  run_cmd --spinner sudo apt-get autoremove -y || true
+  run_or_warn sudo apt-get autoremove -y
   ok "Native packages purged"
 }
 final_docker_cleanup() {
   step "7/15 Final Docker cleanup pass"
   for CONTAINER in ${ALL_CONTAINERS}; do
     if docker ps -aq --filter "name=${CONTAINER}" | grep -q .; then
-      run_cmd docker rm -f "$(docker ps -aq --filter "name=${CONTAINER}")" || true
+      run_or_warn docker rm -f "$(docker ps -aq --filter "name=${CONTAINER}")"
     else
       note "No leftover ${CONTAINER}"
     fi
@@ -327,7 +336,7 @@ harden_arrconf() {
   local changed=0 perm
   perm=$(stat -c '%a' "${ARRCONF_DIR}" 2>/dev/null || echo "")
   if [[ "$perm" != "700" ]]; then
-    run_cmd chmod 700 "${ARRCONF_DIR}" || run_cmd sudo chmod 700 "${ARRCONF_DIR}" || true
+    run chmod 700 "${ARRCONF_DIR}" || run_or_warn sudo chmod 700 "${ARRCONF_DIR}"
     changed=1
   fi
   shopt -s nullglob
@@ -335,7 +344,7 @@ harden_arrconf() {
     [[ -e "$f" ]] || continue
     perm=$(stat -c '%a' "$f" 2>/dev/null || echo "")
     if [[ "$perm" != "600" ]]; then
-      run_cmd chmod 600 "$f" || run_cmd sudo chmod 600 "$f" || true
+      run chmod 600 "$f" || run_or_warn sudo chmod 600 "$f"
       changed=1
     fi
   done
@@ -350,13 +359,13 @@ ensure_proton_auth() {
   harden_arrconf
   if [[ ! -f "${PROTON_AUTH_FILE}" ]]; then
     if [[ -f "${LEGACY_CREDS_WG}" ]]; then
-      if run_cmd mv "${LEGACY_CREDS_WG}" "${PROTON_AUTH_FILE}"; then
+      if run mv "${LEGACY_CREDS_WG}" "${PROTON_AUTH_FILE}"; then
         warn "Migrated legacy creds from ${LEGACY_CREDS_WG}"
       else
         warn "Failed to migrate creds from ${LEGACY_CREDS_WG}"
       fi
     elif [[ -f "${LEGACY_CREDS_DOCKER}" ]]; then
-      if run_cmd mv "${LEGACY_CREDS_DOCKER}" "${PROTON_AUTH_FILE}"; then
+      if run mv "${LEGACY_CREDS_DOCKER}" "${PROTON_AUTH_FILE}"; then
         warn "Migrated legacy creds from ${LEGACY_CREDS_DOCKER}"
       else
         warn "Failed to migrate creds from ${LEGACY_CREDS_DOCKER}"
@@ -368,7 +377,7 @@ ensure_proton_auth() {
   else
     ok "Found ${PROTON_AUTH_FILE}"
   fi
-  run_cmd chmod 600 "${PROTON_AUTH_FILE}" || run_cmd sudo chmod 600 "${PROTON_AUTH_FILE}" || true
+  run chmod 600 "${PROTON_AUTH_FILE}" || run_or_warn sudo chmod 600 "${PROTON_AUTH_FILE}"
 }
 ensure_pmp() {
   local u="$1"
@@ -426,10 +435,10 @@ make_gluetun_apikey() {
     GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_ENV_FILE}" | cut -d= -f2- || true)"
   fi
   if [[ -z "${GLUETUN_API_KEY}" ]]; then
-    if run_cmd --spinner docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey; then
+    if run docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey; then
       GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
     else
-      run_cmd --spinner openssl rand -base64 48 >/tmp/gl_apikey
+      run openssl rand -base64 48 >/tmp/gl_apikey
       GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
     fi
     rm -f /tmp/gl_apikey
@@ -444,7 +453,7 @@ write_gluetun_auth() {
   ensure_dir "$AUTH_DIR"
   local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="readonly"\nauth="basic"\nusername="gluetun"\npassword="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/openvpn/status","GET /v1/wireguard/status","GET /v1/publicip/ip","GET /v1/openvpn/portforwarded"]\n'
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
-  run_cmd chmod 600 "${AUTH_DIR}/config.toml"
+  run chmod 600 "${AUTH_DIR}/config.toml"
 }
 
 # ---------------------------[ PORT MONITOR ]-----------------------------------
@@ -520,8 +529,8 @@ OPENVPN_PASSWORD=${PP}"
 WIREGUARD_MTU=1320"
   fi
   atomic_write "${envf}" "${env_content}\n"
-  run_cmd chmod 600 "${proton_env}"
-  run_cmd chmod 600 "${envf}"
+  run chmod 600 "${proton_env}"
+  run chmod 600 "${envf}"
   ok "Wrote ${envf}"
 }
 
@@ -915,8 +924,7 @@ validate_creds_or_die() {
     OU="$(grep -E '^OPENVPN_USER=' "$ENVF" | cut -d= -f2- || true)"
     OP="$(grep -E '^OPENVPN_PASSWORD=' "$ENVF" | cut -d= -f2- || true)"
     if [[ -z "${OU}" || -z "${OP}" ]]; then
-      err "Proton credentials missing. Edit ${PROTON_AUTH_FILE} then re-run."
-      exit 2
+      die "Proton credentials missing. Edit ${PROTON_AUTH_FILE} then re-run."
     fi
     if [[ "$OU" != *+pmp ]]; then
       warn "Fixing OPENVPN_USER to include +pmp"
@@ -931,7 +939,7 @@ validate_creds_or_die() {
 }
 pull_images() {
   step "13/15 Pulling images"
-  if ! compose_cmd --spinner pull; then
+  if ! compose_cmd pull; then
     warn "Pull failed; will rely on up"
   fi
 }
@@ -943,7 +951,7 @@ start_with_checks() {
   local MAX_RETRIES=5 RETRY=0
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
-    compose_cmd up -d gluetun || warn "gluetun up failed"
+    run_or_warn compose_cmd up -d gluetun
     local waited=0 HEALTH="unknown" IP="" PF=""
     while [[ $waited -lt 180 ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
@@ -962,20 +970,19 @@ start_with_checks() {
       break
     fi
     warn "Gluetun not healthy yet; down & retry"
-    compose_cmd down >/dev/null 2>&1 || true
+    run_or_warn compose_cmd down >/dev/null 2>&1
     clear_port_conflicts
     RETRY=$((RETRY + 1))
   done
   if [[ "$HEALTH" != healthy ]]; then
-    err "Gluetun did not achieve connectivity; check: docker logs gluetun"
-    exit 3
+    die "Gluetun did not achieve connectivity; check: docker logs gluetun"
   fi
   compose_cmd up -d qbittorrent prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
   print_qbt_temp_password_if_any
   if [ -n "${QBT_USER:-}" ] && [ -n "${QBT_PASS:-}" ]; then
     ok "qBittorrent credentials preseeded"
   fi
-  compose_cmd ps || true
+  run_or_warn compose_cmd ps
   local ip pf
   ip="$(wget -qO- "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" || true)"
   note "Public IP: ${ip}"
@@ -990,7 +997,7 @@ install_aliases() {
   local src
   src="$(dirname "${BASH_SOURCE[0]}")/.aliasarr"
   local dst="${ARR_STACK_DIR}/.aliasarr"
-  run_cmd cp "$src" "$dst" || warn "Failed to copy alias file"
+  run cp "$src" "$dst" || warn "Failed to copy alias file"
   local shellrc="/home/${USER_NAME}/.zshrc"
   local line="[ -f \"$dst\" ] && source \"$dst\""
   if ! grep -Fq "$line" "$shellrc" 2>/dev/null; then
