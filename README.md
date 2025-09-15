@@ -11,7 +11,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 - **Gluetun** (ProtonVPN) pinned to v3.38.0 with sensible defaults (DoT off for compatibility, stable health target, PF on, server list updates disabled).
 - **qBittorrent** in Gluetun’s network namespace.
-- **Automatic qBittorrent port sync** via Gluetun’s NAT-PMP hook (no background monitor).
+ - **Automatic qBittorrent port sync** via a sidecar that refreshes Proton's PF port every 45s.
 - **Sonarr, Radarr, Prowlarr, Bazarr, FlareSolverr**.
 - A comprehensive **`.aliasarr`** helper with `pvpn` and stack aliases.
 
@@ -61,11 +61,12 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
    nano arrstack-uninstall.sh                           # optional reset script
    ```
 
-    * Place Proton credentials in `./arrconf/proton.auth` (two lines: `PROTON_USER=...` and `PROTON_PASS=...`). Keep the folder `chmod 700` and the file `chmod 600`.
-    * Proton port forwarding requires the OpenVPN username to end with **`+pmp`** (the installer auto-appends).
-    * Provider mode means no `.ovpn` file is needed – `VPN_SERVICE_PROVIDER=protonvpn` handles Proton configs. Drop `.ovpn` files only when using a custom provider.
-    * For WireGuard fallback, drop Proton `wg*.conf` files into `./arrconf/` (legacy `~/srv/...` paths are migrated automatically).
-    * LinuxServer/qB requires the mapped port and `WEBUI_PORT` to match; editing `QBT_WEBUI_PORT` updates the compose mapping, container setting, healthcheck and port-forward hook together.
+   * Place Proton credentials in `./arrconf/proton.auth` (two lines: `PROTON_USER=...` and `PROTON_PASS=...`). Keep the folder `chmod 700` and the file `chmod 600`.
+   * Proton port forwarding requires the OpenVPN username to end with **`+pmp`** (the installer auto-appends).
+   * Provider mode means no `.ovpn` file is needed – `VPN_SERVICE_PROVIDER=protonvpn` handles Proton configs. Drop `.ovpn` files only when using a custom provider.
+   * For WireGuard fallback, drop Proton `wg*.conf` files into `./arrconf/` (legacy `~/srv/...` paths are migrated automatically).
+    * LinuxServer/qB requires the mapped port and `WEBUI_PORT` to match; editing `QBT_WEBUI_PORT` updates the compose mapping, container setting, healthcheck and port-sync sidecar together.
+   * The installer writes a `.env` in `~/srv/arrstack` if you want to run `docker compose` manually.
 
 3. **Run it** as your normal user:
 
@@ -91,7 +92,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
      > The WebUI is bound to `${LAN_IP}:${QBT_HTTP_PORT_HOST}`. Set `LAN_IP=${GLUETUN_CONTROL_HOST}` for host-only access or your host's LAN address to reach it from the network.
 
-     > Only `${GLUETUN_CONTROL_HOST}` (Gluetun's loopback) can access the API without a login (`WebUI\BypassLocalAuth=true`) so the port-forward hook works; browsers on the LAN still require a password.
+     > Only `${GLUETUN_CONTROL_HOST}` (Gluetun's loopback) can access the API without a login (`WebUI\BypassLocalAuth=true`) so the pf-sync sidecar works; browsers on the LAN still require a password.
 
     > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
 
@@ -191,7 +192,7 @@ pvpn portsync     # force qB to use the currently forwarded port
 
 - Use Proton’s OpenVPN credentials with the `+pmp` suffix for port forwarding. These differ from your standard Proton login.
 - The stack pins Gluetun to `v3.38.0`. Gluetun `v3.39+` filters Proton servers too aggressively and often reports “no servers available”. We also set `UPDATER_PERIOD=0` to prevent server list updates. If issues persist, specify exact `SERVER_HOSTNAMES` like `node-xx-xx.protonvpn.net`.
-- Port forwarding only works on Proton’s P2P servers and a new port is assigned each session. qBittorrent’s listening port is synced automatically via Gluetun’s NAT-PMP hook.
+ - Port forwarding only works on Proton’s P2P servers and a new port is assigned each session. qBittorrent’s listening port is synced automatically by a sidecar that polls Gluetun’s API.
 - Recommended health check tuning: `HEALTH_VPN_DURATION_INITIAL=30s` and `HEALTH_SUCCESS_WAIT_DURATION=10s` with `HEALTH_TARGET_ADDRESS=1.1.1.1:443`.
 
 ---
