@@ -459,7 +459,8 @@ write_env() {
     PP="$(grep -E '^PROTON_PASS=' "${PROTON_AUTH_FILE}" | cut -d= -f2- | tr -d '"' || true)"
   fi
   local env_content
-  env_content=$(cat <<EOF
+  env_content=$(
+    cat <<EOF
 # IDs & timezone
 PUID=${PUID}
 PGID=${PGID}
