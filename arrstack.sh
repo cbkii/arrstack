@@ -123,7 +123,7 @@ ARR_ENV_FILE="${ARR_ENV_FILE:-${ARR_STACK_DIR}/.env}"
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_ENV_FILE LEGACY_VPNCONFS_DIR ARRCONF_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MOVIES_DIR TV_DIR SUBS_DIR
-export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE
+export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP LOCALHOST_ADDR LOCALHOST_NAME GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_MODE SERVER_COUNTRIES SERVER_CC_PRIORITY DEFAULT_COUNTRY GLUETUN_API_KEY
 # ----------------------------[ LOGGING ]---------------------------------------
@@ -759,7 +759,7 @@ YAML
       interval: 30s
       timeout: 15s
       retries: 5
-      start_period: 60s
+      start_period: 90s
     restart: unless-stopped
 
   qbittorrent:
@@ -780,11 +780,11 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/version >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     restart: unless-stopped
 
   pf-sync:
@@ -802,7 +802,7 @@ YAML
     restart: unless-stopped
     command: >
       sh -c '
-        echo "[pf-sync] Starting PF-to-qB port synchroniser";
+        echo "[pf-sync] Starting PF-to-qB port synchroniser (polling every 45s)";
         CUR="";
         while :; do
           P=$(curl -fsS http://${GLUETUN_CONTROL_HOST}:8000/v1/openvpn/portforwarded || true);
@@ -810,14 +810,14 @@ YAML
             if [ "$P" != "$CUR" ]; then
               echo "[pf-sync] Applying Proton PF port $P to qBittorrent";
               if [ -n "${QBT_USERNAME}" ] && [ -n "${QBT_PASSWORD}" ]; then
-                curl -fsS -c /tmp/qbt.cookie "http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/auth/login" \
+                curl -fsS -c /tmp/qbt.cookie "http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/auth/login" \
                   --data "username=${QBT_USERNAME}&password=${QBT_PASSWORD}" >/dev/null 2>&1 && \
                 curl -fsS -b /tmp/qbt.cookie \
-                  "http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
+                  "http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
                   --data "json={\\"listen_port\\":${P},\\"upnp\\":false}" >/dev/null 2>&1;
               else
                 curl -fsS -X POST \
-                  "http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
+                  "http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
                   --data "json={\\"listen_port\\":${P},\\"upnp\\":false}" >/dev/null 2>&1;
               fi;
               CUR="$P";
@@ -825,6 +825,7 @@ YAML
           else
             echo "[pf-sync] PF port not available yet (value='$P')";
           fi
+          echo "[pf-sync] Sleeping 45s before next check";
           sleep 45;
         done'
 
@@ -847,7 +848,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${SONARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${SONARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -873,7 +874,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${RADARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${RADARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -894,7 +895,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${PROWLARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${PROWLARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -920,7 +921,7 @@ YAML
       radarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${BAZARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${BAZARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -937,7 +938,7 @@ YAML
       prowlarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${FLARESOLVERR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${FLARESOLVERR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -972,6 +973,7 @@ validate_creds_or_die() {
 }
 pull_images() {
   step "13/15 Pulling images"
+  note "Image downloads can be time-consuming; please wait"
   if ! compose_cmd pull; then
     warn "Pull failed; will rely on up"
   fi
@@ -985,6 +987,7 @@ start_with_checks() {
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
     run_or_warn compose_cmd up -d gluetun
+    note "Waiting for gluetun to report healthy (up to 180s)..."
     local waited=0 HEALTH="unknown" IP="" PF=""
     while [[ $waited -lt 180 ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
@@ -1011,6 +1014,7 @@ start_with_checks() {
     die "Gluetun did not achieve connectivity; check: docker logs gluetun"
   fi
   compose_cmd up -d qbittorrent pf-sync prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
+  note "Remaining services launched; health checks may take up to 90s"
   print_qbt_temp_password_if_any
   if [ -n "${QBT_USER:-}" ] && [ -n "${QBT_PASS:-}" ]; then
     ok "qBittorrent credentials preseeded"
@@ -1086,7 +1090,7 @@ main() {
   echo >&3
   ok "Done. Next steps:"
   note "  • Edit ${PROTON_AUTH_FILE} (username WITHOUT +pmp) if you haven't already."
-  note "  • qB Web UI: http://<host>:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
+  note "  • qB Web UI: http://${LOCALHOST_NAME}:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
