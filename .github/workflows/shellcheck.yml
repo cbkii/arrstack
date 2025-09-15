@@ -1,0 +1,17 @@
+name: shellcheck
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck and shfmt
+        run: sudo apt-get update && sudo apt-get install -y shellcheck shfmt
+      - name: Run shfmt
+        run: shfmt -i 2 -ci -bn -w *.sh
+      - name: Run ShellCheck
+        run: shellcheck arrstack.sh arrstack-uninstall.sh arrconf/helpers.sh arrconf/userconf.defaults.sh
