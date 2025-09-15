@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y shellcheck shfmt ripgrep
+      - name: shfmt
+        run: shfmt -i 2 -ci -bn -w *.sh
+      - name: shellcheck
+        run: shellcheck arrstack.sh arrstack-uninstall.sh
+      - name: banned patterns
+        run: |
+          files=$(git ls-files '*.sh')
+          ! rg -n 'eval' $files || { echo 'eval found'; exit 1; }
+          ! rg -n '\x60' $files || { echo 'backticks found'; exit 1; }
+          ! rg -n 'set -e' $(git ls-files '*.sh') || { echo 'set -e found'; exit 1; }
