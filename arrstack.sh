@@ -573,7 +573,7 @@ WebUI\\Address=*
 WebUI\\ServerDomains=*
 WebUI\\Port=${QBT_WEBUI_PORT}
 
-# --- Avoid conflicts with Proton NAT-PMP (let Gluetun set the listen port) ---
+# --- Avoid conflicts: pf-sync sidecar manages the listen port ---
 Connection\\UPnP=false
 Connection\\UseUPnP=false
 Connection\\UseNAT-PMP=false
@@ -741,14 +741,6 @@ YAML
       - HTTP_CONTROL_SERVER_ADDRESS="${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
-      - VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c '\
-          for i in $(seq 1 30); do \
-            wget -qO- --timeout=2 http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/version && break || sleep 1; \
-          done; \
-          wget -qO- --timeout=5 \
-            --referer="http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/" \
-            --post-data "json={\"listen_port\":{{PORTS}},\"use_upnp\":false,\"use_natpmp\":false}" \
-            http://${GLUETUN_CONTROL_HOST}:${QBT_HTTP_PORT_HOST}/api/v2/app/setPreferences >/dev/null 2>&1 || exit 0'
       - PUID=${PUID}
       - PGID=${PGID}
     volumes:
@@ -763,9 +755,9 @@ YAML
       - "${LAN_IP}:${BAZARR_PORT}:${BAZARR_PORT}"                    # Bazarr
       - "${LAN_IP}:${FLARESOLVERR_PORT}:${FLARESOLVERR_PORT}"                    # FlareSolverr
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip >/dev/null && wget -qO- http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/${VPN_TYPE}/status | grep -q 'status.:.running'"]
-      interval: 45s
-      timeout: 10s
+      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip >/dev/null && curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/${VPN_TYPE}/status | grep -qi running && ( [ \"${VPN_TYPE}\" != \"openvpn\" ] || curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded | grep -Eq '^[1-9][0-9]{3,5}$' )"]
+      interval: 30s
+      timeout: 15s
       retries: 5
       start_period: 60s
     restart: unless-stopped
@@ -794,6 +786,47 @@ YAML
       retries: 3
       start_period: 60s
     restart: unless-stopped
+
+  pf-sync:
+    image: curlimages/curl:8.8.0
+    container_name: pf-sync
+    network_mode: "service:gluetun"
+    environment:
+      - GLUETUN_CONTROL_HOST=${GLUETUN_CONTROL_HOST}
+      - QBT_WEBUI_PORT=${QBT_WEBUI_PORT}
+      - QBT_USERNAME=${QBT_USER:-}
+      - QBT_PASSWORD=${QBT_PASS:-}
+    depends_on:
+      qbittorrent:
+        condition: service_healthy
+    restart: unless-stopped
+    command: >
+      sh -c '
+        echo "[pf-sync] Starting PF-to-qB port synchroniser";
+        CUR="";
+        while :; do
+          P=$(curl -fsS http://${GLUETUN_CONTROL_HOST}:8000/v1/openvpn/portforwarded || true);
+          if echo "$P" | grep -Eq "^[1-9][0-9]{3,5}$"; then
+            if [ "$P" != "$CUR" ]; then
+              echo "[pf-sync] Applying Proton PF port $P to qBittorrent";
+              if [ -n "${QBT_USERNAME}" ] && [ -n "${QBT_PASSWORD}" ]; then
+                curl -fsS -c /tmp/qbt.cookie "http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/auth/login" \
+                  --data "username=${QBT_USERNAME}&password=${QBT_PASSWORD}" >/dev/null 2>&1 && \
+                curl -fsS -b /tmp/qbt.cookie \
+                  "http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
+                  --data "json={\\"listen_port\\":${P},\\"upnp\\":false}" >/dev/null 2>&1;
+              else
+                curl -fsS -X POST \
+                  "http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
+                  --data "json={\\"listen_port\\":${P},\\"upnp\\":false}" >/dev/null 2>&1;
+              fi;
+              CUR="$P";
+            fi
+          else
+            echo "[pf-sync] PF port not available yet (value='$P')";
+          fi
+          sleep 45;
+        done'
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -977,7 +1010,7 @@ start_with_checks() {
   if [[ "$HEALTH" != healthy ]]; then
     die "Gluetun did not achieve connectivity; check: docker logs gluetun"
   fi
-  compose_cmd up -d qbittorrent prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
+  compose_cmd up -d qbittorrent pf-sync prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
   print_qbt_temp_password_if_any
   if [ -n "${QBT_USER:-}" ] && [ -n "${QBT_PASS:-}" ]; then
     ok "qBittorrent credentials preseeded"

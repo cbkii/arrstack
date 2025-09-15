@@ -48,7 +48,7 @@ export SERVER_COUNTRIES
 SERVER_CC_PRIORITY="$(_arr_get SERVER_CC_PRIORITY)"
 
 # Known services in this project (compose names)
-ARR_SERVICES=(gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr)
+ARR_SERVICES=(gluetun qbittorrent pf-sync sonarr radarr prowlarr bazarr flaresolverr)
 
 # ----------------[ Project-level controls ]----------------
 arr.up()       { _arr_dc up -d; }
