@@ -9,7 +9,7 @@ By default the stack connects with **OpenVPN** for reliable port forwarding; **W
 
 ## Features
 
-- **Gluetun** (ProtonVPN) with sensible defaults (DoT off for compatibility, stable health target, PF on, daily server list updates).
+- **Gluetun** (ProtonVPN) pinned to v3.38.0 with sensible defaults (DoT off for compatibility, stable health target, PF on, server list updates disabled).
 - **qBittorrent** in Gluetun’s network namespace.
 - **Automatic qBittorrent port sync** via Gluetun’s NAT-PMP hook (no background monitor).
 - **Sonarr, Radarr, Prowlarr, Bazarr, FlareSolverr**.
@@ -183,7 +183,16 @@ pvpn portsync     # force qB to use the currently forwarded port
    SERVER_CC_PRIORITY="Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg"
    ```
 
-   * Rationale: geographic proximity/typical subsea paths from AU → SE/E Asia → US-West → Western Europe. Validate with your line by running `arr_vpn_fastest`.
+    * Rationale: geographic proximity/typical subsea paths from AU → SE/E Asia → US-West → Western Europe. Validate with your line by running `arr_vpn_fastest`.
+
+---
+
+## ProtonVPN + Gluetun notes (2024/2025)
+
+- Use Proton’s OpenVPN credentials with the `+pmp` suffix for port forwarding. These differ from your standard Proton login.
+- The stack pins Gluetun to `v3.38.0`. Gluetun `v3.39+` filters Proton servers too aggressively and often reports “no servers available”. We also set `UPDATER_PERIOD=0` to prevent server list updates. If issues persist, specify exact `SERVER_HOSTNAMES` like `node-xx-xx.protonvpn.net`.
+- Port forwarding only works on Proton’s P2P servers and a new port is assigned each session. qBittorrent’s listening port is synced automatically via Gluetun’s NAT-PMP hook.
+- Recommended health check tuning: `HEALTH_VPN_DURATION_INITIAL=30s` and `HEALTH_SUCCESS_WAIT_DURATION=10s` with `HEALTH_TARGET_ADDRESS=1.1.1.1:443`.
 
 ---
 
@@ -206,7 +215,7 @@ If you want to enable the fallback to wireguard, download a Proton **WireGuard**
 ## Update the stack
 
 The installer is safe to re-run; it will pull new images and start cleanly.
-Gluetun’s server list updater runs daily (`UPDATER_PERIOD=24h`). Adjust or disable it in the `.env` file if desired.
+Gluetun’s server list updater is disabled by default (`UPDATER_PERIOD=0`) due to current Proton server filtering issues. Re-enable it in the `.env` file if desired.
 For a **full reset**, run `arrstack-uninstall.sh` (backups to `~/srv/backups/`) and then reinstall.
 
 ```bash

@@ -498,9 +498,10 @@ SUBS_DIR=${SUBS_DIR}
 # ProtonVPN config
 VPN_MODE=${VPN_MODE}
 VPN_TYPE=${VPN_MODE}
-SERVER_COUNTRIES=${CN}
+SERVER_COUNTRIES="${CN}"
 SERVER_CC_PRIORITY="${SERVER_CC_PRIORITY}"
-UPDATER_PERIOD=24h
+# UPDATER_PERIOD=24h
+UPDATER_PERIOD=0
 EOF
   )
   local proton_env="${ARRCONF_DIR}/proton.env"
@@ -694,7 +695,7 @@ write_compose() {
     cat <<'YAML'
 services:
   gluetun:
-    image: qmcgaw/gluetun:latest
+    image: qmcgaw/gluetun:v3.38.0
     container_name: gluetun
     cap_add: ["NET_ADMIN"]
     devices:
@@ -724,6 +725,8 @@ YAML
       - DOT=off
       - UPDATER_PERIOD=${UPDATER_PERIOD}
       - HEALTH_TARGET_ADDRESS=${GLUETUN_HEALTH_TARGET}
+      - HEALTH_VPN_DURATION_INITIAL=30s
+      - HEALTH_SUCCESS_WAIT_DURATION=10s
       # Control server (RBAC)
       - HTTP_CONTROL_SERVER_ADDRESS="${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
       - HTTP_CONTROL_SERVER_LOG=off
