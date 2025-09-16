@@ -68,15 +68,51 @@ _log_cmd() {
   printf '+ %s\n' "$(_stringify_cmd "${argv[@]}")" | _redact >>"$LOG_FILE"
 }
 
+print_docker_cmd() {
+  local -a argv=("$@")
+  local ts_prefix=""
+  if [[ -v SCRIPT_START ]]; then
+    ts_prefix="$(ts) "
+  fi
+  local msg
+  msg=$(printf '%b+ %s%b' "${C_BLUE}" "$(_stringify_cmd "${argv[@]}")" "${C_RESET}")
+  if ! printf '%b\n' "${ts_prefix}${msg}" | _redact >&3 2>/dev/null; then
+    printf '%b\n' "${ts_prefix}${msg}" | _redact
+  fi
+}
+
 _exec_cmd() {
   local warn_on_fail=$1
   shift || true
   local -a argv=("$@")
   _log_cmd "${argv[@]}"
+  local stream_docker=0
+  if [[ "${argv[0]:-}" == docker ]]; then
+    if is_dry; then
+      print_docker_cmd "${argv[@]}"
+    elif [[ -e /proc/self/fd/3 && -f /proc/self/fd/1 ]]; then
+      if [[ "${argv[1]:-}" == compose ]]; then
+        for arg in "${argv[@]:2}"; do
+          case "$arg" in
+            pull|up|down|start|restart|stop|ps|logs)
+              stream_docker=1
+              break
+              ;;
+          esac
+        done
+      fi
+    fi
+  fi
   if is_dry; then
     return 0
   fi
-  "${argv[@]}"
+  if (( stream_docker )); then
+    DOCKER_STREAM_FD3=1 "${argv[@]}"
+  elif [[ "${argv[0]:-}" == docker ]]; then
+    DOCKER_STREAM_FD3=0 "${argv[@]}"
+  else
+    "${argv[@]}"
+  fi
   local rc=$?
   if (( warn_on_fail )) && (( rc != 0 )); then
     warn "Command failed ($rc): $(_stringify_cmd "${argv[@]}")"
@@ -184,9 +220,18 @@ check_deps() {
   step "1/15 Checking prerequisites"
   [[ "$(whoami)" == "${USER_NAME}" ]] || die "Run as '${USER_NAME}' (current: $(whoami))"
 
-  local pkgs=()
-  command -v docker >/dev/null 2>&1 || pkgs+=(docker.io)
-  docker compose version >/dev/null 2>&1 || pkgs+=(docker-compose-plugin)
+  local pkgs=() have_docker=0
+  if command -v docker >/dev/null 2>&1; then
+    have_docker=1
+  else
+    pkgs+=(docker.io)
+  fi
+  if (( have_docker )); then
+    print_docker_cmd docker compose version
+    docker compose version >/dev/null 2>&1 || pkgs+=(docker-compose-plugin)
+  else
+    pkgs+=(docker-compose-plugin)
+  fi
   command -v wget >/dev/null 2>&1 || pkgs+=(wget)
   command -v curl >/dev/null 2>&1 || pkgs+=(curl)
   command -v ss >/dev/null 2>&1 || pkgs+=(iproute2)
@@ -201,6 +246,7 @@ check_deps() {
   for b in docker wget curl ss openssl xxd; do
     command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"
   done
+  print_docker_cmd docker compose version
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
   ok "All prerequisites installed"
 }
@@ -1208,6 +1254,17 @@ main() {
   SCRIPT_START=$(date +%s)
   step "0/15 ARR+VPN merged installer"
   check_deps
+  if [[ "${DOCKER_CMD_WRAPPED:-0}" -eq 0 ]]; then
+    DOCKER_CMD_WRAPPED=1
+    docker() {
+      print_docker_cmd docker "$@"
+      if [[ "${DOCKER_STREAM_FD3:-0}" == 1 && -e /proc/self/fd/3 ]]; then
+        command docker "$@" 2>&1 | tee /proc/self/fd/3
+        return $?
+      fi
+      command docker "$@"
+    }
+  fi
   stop_stack_if_present
   stop_named_containers
   clear_port_conflicts
