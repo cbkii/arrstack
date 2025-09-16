@@ -443,15 +443,4 @@ Run the provided `arrstack-uninstall.sh` script to back up existing configuratio
 - Proton credentials live at `./arrconf/proton.auth` (`chmod 600` inside a `chmod 700` folder). Legacy files under `~/srv/docker/gluetun/` or `~/srv/wg-configs/` are migrated automatically. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
 - `.env` is also `chmod 600` and only contains what Compose needs.
 - You can customise paths and ports by editing the variables at the top of the script before running it.
-- Scripts avoid `set -e` and log warnings by default; use `die` only for genuine unsafe conditions.
-
----
-
-[Docker documentation on healthcheck dependencies](https://docs.docker.com/compose/how-tos/advanced-deployments/dependent-services/#ensure-that-a-service-depends-on-another)
-
-[Proton VPN port forwarding requirements](https://protonvpn.com/support/port-forwarding/)
-
-[Gluetun HTTP control server](https://github.com/qdm12/gluetun-wiki/blob/main/http_control_server.md)
-
-[qBittorrent Web API](https://github.com/qbittorrent/qBittorrent/wiki/Web-API-Documentation)
-
+- Scripts avoid `set -e` and log warnings by default; using `die` only for genuine unsafe conditions.
