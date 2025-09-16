@@ -66,6 +66,19 @@ ok() { printf '%s✔ %s%s\n' "$C_GREEN" "$1" "$C_RESET"; }
 SUDO=""
 [[ $EUID -ne 0 ]] && SUDO="sudo"
 
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+check_prereqs() {
+  local cmds=(docker tar find grep awk xargs fuser systemctl dpkg apt-get)
+  local cmd
+  for cmd in "${cmds[@]}"; do
+    require_cmd "$cmd"
+  done
+  [[ -n "$SUDO" ]] && require_cmd sudo
+}
+
 confirm() {
   read -r -p "This will REMOVE Arr stack containers, configs and packages. Continue? (y/N) " ans
   [[ "$ans" =~ ^[Yy]$ ]] || {
@@ -82,6 +95,25 @@ find_app_dirs() {
   for APP in $ALL_CONTAINERS; do
     find "$base" -maxdepth "$depth" -type d -iname "${APP}*" 2>/dev/null
   done
+}
+
+system_app_dirs() {
+  {
+    find_app_dirs /var/lib 1
+    find_app_dirs /opt 1
+    find_app_dirs /etc 1
+  } | sort -u
+}
+
+config_file_candidates() {
+  find "${HOME}" /etc /var/lib /opt -type f \
+    \( -iname 'qBittorrent.conf' -o -iname 'qBittorrent.ini' -o \
+    -iname 'settings.json' -o -iname 'config.json' -o \
+    -iname 'config.xml' -o -iname 'nzbdrone.db' -o \
+    -iname 'sonarr.db' -o -iname 'radarr.db' -o \
+    -iname 'prowlarr.db' -o -iname 'bazarr.db' -o \
+    -iname 'jackett.db' -o -iname 'lidarr.db' -o \
+    -iname 'readarr.db' \) 2>/dev/null
 }
 
 backup_all() {
@@ -110,13 +142,7 @@ backup_all() {
   note "Backing up system directories"
   while IFS= read -r dir; do
     $SUDO tar -czf "${BACKUP_SUBDIR}/system-$(basename "$dir").tgz" "$dir" || true
-  done < <(
-    {
-      find_app_dirs /var/lib 1
-      find_app_dirs /opt 1
-      find_app_dirs /etc 1
-    } | sort -u
-  )
+  done < <(system_app_dirs)
   note "Backing up systemd service files"
   for SVC in ${ALL_NATIVE_SERVICES}; do
     for DIR in /etc/systemd/system /lib/systemd/system; do
@@ -126,19 +152,10 @@ backup_all() {
     done
   done
   note "Backing up standalone config files"
+  mkdir -p "${BACKUP_SUBDIR}/files"
   while IFS= read -r file; do
-    mkdir -p "${BACKUP_SUBDIR}/files"
     $SUDO cp --parents "$file" "${BACKUP_SUBDIR}/files" 2>/dev/null || true
-  done < <(
-    find "${HOME}" /etc /var/lib /opt -type f \
-      \( -iname 'qBittorrent.conf' -o -iname 'qBittorrent.ini' -o \
-      -iname 'settings.json' -o -iname 'config.json' -o \
-      -iname 'config.xml' -o -iname 'nzbdrone.db' -o \
-      -iname 'sonarr.db' -o -iname 'radarr.db' -o \
-      -iname 'prowlarr.db' -o -iname 'bazarr.db' -o \
-      -iname 'jackett.db' -o -iname 'lidarr.db' -o \
-      -iname 'readarr.db' \) 2>/dev/null
-  )
+  done < <(config_file_candidates)
   ok "Backups saved to ${BACKUP_SUBDIR}"
 }
 
@@ -150,7 +167,7 @@ stop_stack() {
     fi
   done
   for c in ${ALL_CONTAINERS}; do
-    if docker ps -a --format '{{.Names}}' | grep -q "^${c}$"; then
+    if docker ps -a --format '{{.Names}}' | grep -qF "${c}"; then
       docker rm -f "${c}" >/dev/null 2>&1 || true
     fi
   done
@@ -198,25 +215,10 @@ remove_files() {
   done < <(find_app_dirs "${HOME}/.config" 1 | sort -u)
   while IFS= read -r dir; do
     $SUDO rm -rf "$dir" 2>/dev/null || true
-  done < <(
-    {
-      find_app_dirs /var/lib 1
-      find_app_dirs /opt 1
-      find_app_dirs /etc 1
-    } | sort -u
-  )
+  done < <(system_app_dirs)
   while IFS= read -r file; do
     $SUDO rm -f "$file" 2>/dev/null || true
-  done < <(
-    find "${HOME}" /etc /var/lib /opt -type f \
-      \( -iname 'qBittorrent.conf' -o -iname 'qBittorrent.ini' -o \
-      -iname 'settings.json' -o -iname 'config.json' -o \
-      -iname 'config.xml' -o -iname 'nzbdrone.db' -o \
-      -iname 'sonarr.db' -o -iname 'radarr.db' -o \
-      -iname 'prowlarr.db' -o -iname 'bazarr.db' -o \
-      -iname 'jackett.db' -o -iname 'lidarr.db' -o \
-      -iname 'readarr.db' \) 2>/dev/null
-  )
+  done < <(config_file_candidates)
   ok "File cleanup complete"
 }
 
@@ -240,6 +242,7 @@ main() {
   for a in "$@"; do
     [[ $a == "--purge-arrconf" ]] && PURGE_ARRCONF=1
   done
+  check_prereqs
   confirm
   backup_all
   stop_stack
