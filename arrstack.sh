@@ -204,7 +204,7 @@ check_deps() {
 
 # ----------------------------[ CLEANUP PHASE ]---------------------------------
 compose_cmd() {
-  run docker compose --env-file "$ARR_ENV_FILE" -f "${ARR_STACK_DIR}/docker-compose.yml" "$@"
+  run docker compose --project-name arrstack --env-file "$ARR_ENV_FILE" -f "${ARR_STACK_DIR}/docker-compose.yml" "$@"
 }
 
 stop_stack_if_present() {
@@ -755,7 +755,12 @@ YAML
       - "${LAN_IP}:${BAZARR_PORT}:${BAZARR_PORT}"                    # Bazarr
       - "${LAN_IP}:${FLARESOLVERR_PORT}:${FLARESOLVERR_PORT}"                    # FlareSolverr
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip >/dev/null && curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/${VPN_TYPE}/status | grep -qi running && ( [ \"${VPN_TYPE}\" != \"openvpn\" ] || curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded | grep -Eq '^[1-9][0-9]{3,5}$' )"]
+      test: >
+        sh -c '
+          curl -fsS http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip >/dev/null &&
+          curl -fsS http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status | grep -qi "running" &&
+          curl -fsS http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded | grep -Eq "^[1-9][0-9]{3,5}$"
+        '
       interval: 30s
       timeout: 15s
       retries: 5
@@ -780,10 +785,10 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 6
       start_period: 90s
     restart: unless-stopped
 
@@ -805,25 +810,25 @@ YAML
         echo "[pf-sync] Starting PF-to-qB port synchroniser (polling every 45s)";
         CUR="";
         while :; do
-          P=$(curl -fsS http://${GLUETUN_CONTROL_HOST}:8000/v1/openvpn/portforwarded || true);
-          if echo "$P" | grep -Eq "^[1-9][0-9]{3,5}$"; then
-            if [ "$P" != "$CUR" ]; then
-              echo "[pf-sync] Applying Proton PF port $P to qBittorrent";
-              if [ -n "${QBT_USERNAME}" ] && [ -n "${QBT_PASSWORD}" ]; then
-                curl -fsS -c /tmp/qbt.cookie "http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/auth/login" \
-                  --data "username=${QBT_USERNAME}&password=${QBT_PASSWORD}" >/dev/null 2>&1 && \
+          P=$$(curl -fsS http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded || true);
+          if echo "$$P" | grep -Eq "^[1-9][0-9]{3,5}$"; then
+            if [ "$$P" != "$$CUR" ]; then
+              echo "[pf-sync] Applying Proton PF port $$P to qBittorrent";
+              if [ -n "$${QBT_USERNAME}" ] && [ -n "$${QBT_PASSWORD}" ]; then
+                curl -fsS -c /tmp/qbt.cookie "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/auth/login" \
+                  --data "username=$${QBT_USERNAME}&password=$${QBT_PASSWORD}" >/dev/null 2>&1 && \
                 curl -fsS -b /tmp/qbt.cookie \
-                  "http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
-                  --data "json={\\"listen_port\\":${P},\\"upnp\\":false}" >/dev/null 2>&1;
+                  "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
+                  --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1;
               else
                 curl -fsS -X POST \
-                  "http://${LOCALHOST_ADDR}:${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
-                  --data "json={\\"listen_port\\":${P},\\"upnp\\":false}" >/dev/null 2>&1;
+                  "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
+                  --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1;
               fi;
-              CUR="$P";
+              CUR="$$P";
             fi
           else
-            echo "[pf-sync] PF port not available yet (value='$P')";
+            echo "[pf-sync] PF port not available yet (value='$$P')";
           fi
           echo "[pf-sync] Sleeping 45s before next check";
           sleep 45;
@@ -848,7 +853,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${SONARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${SONARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -874,7 +879,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${RADARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${RADARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -895,7 +900,7 @@ YAML
       qbittorrent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${PROWLARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${PROWLARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -921,7 +926,7 @@ YAML
       radarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${BAZARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${BAZARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -938,7 +943,7 @@ YAML
       prowlarr:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://${GLUETUN_CONTROL_HOST}:${FLARESOLVERR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${FLARESOLVERR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -981,23 +986,28 @@ pull_images() {
 start_with_checks() {
   step "14/15 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
-  local VM
-  VM="$(grep -E '^VPN_MODE=' "${ARR_ENV_FILE}" | cut -d= -f2- || echo "${DEFAULT_VPN_MODE}")"
   local MAX_RETRIES=5 RETRY=0
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
+    run_or_warn compose_cmd config --services
+    run_or_warn compose_cmd config
     run_or_warn compose_cmd up -d gluetun
-    note "Waiting for gluetun to report healthy (up to 180s)..."
+    run_or_warn compose_cmd ps
+    run_or_warn docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+    if ! is_dry && ! docker ps --format '{{.Names}}' | grep -qx 'gluetun'; then
+      die "Gluetun container failed to start"
+    fi
+    local max_wait=180
+    if ! docker image inspect qmcgaw/gluetun:v3.38.0 >/dev/null 2>&1; then
+      max_wait=300
+    fi
+    note "Waiting for gluetun to report healthy (up to ${max_wait}s)..."
     local waited=0 HEALTH="unknown" IP="" PF=""
-    while [[ $waited -lt 180 ]]; do
+    while [[ $waited -lt ${max_wait} ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
       IP="$(docker exec gluetun wget -qO- "http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" 2>/dev/null || true)"
-      if [[ "$VM" = openvpn ]]; then
-        PF="$(docker exec gluetun wget -qO- "http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" 2>/dev/null | grep -o '[0-9]\+' || true)"
-        [[ "$HEALTH" = healthy && -n "$IP" && -n "$PF" && "$PF" -gt 1024 ]] && break
-      else
-        [[ "$HEALTH" = healthy && -n "$IP" ]] && break
-      fi
+      PF="$(docker exec gluetun wget -qO- "http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" 2>/dev/null | grep -o '[0-9]\+' || true)"
+      [[ "$HEALTH" = healthy && -n "$IP" && -n "$PF" && "$PF" -gt 1024 ]] && break
       sleep 5
       waited=$((waited + 5))
     done
@@ -1023,10 +1033,8 @@ start_with_checks() {
   local ip pf
   ip="$(wget -qO- "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" || true)"
   note "Public IP: ${ip}"
-  if [[ "$VM" = openvpn ]]; then
-    pf="$(wget -qO- "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" || true)"
-    note "Forwarded port: ${pf}"
-  fi
+  pf="$(wget -qO- "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" || true)"
+  note "Forwarded port: ${pf}"
 }
 
 install_aliases() {
