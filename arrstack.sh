@@ -76,8 +76,21 @@ _exec_cmd() {
   if is_dry; then
     return 0
   fi
-  "${argv[@]}"
-  local rc=$?
+
+  local rc
+  if [[ "${argv[0]}" == docker && ( "${argv[1]:-}" == compose || "${argv[1]:-}" == pull ) ]]; then
+    if [[ -e /dev/fd/3 ]]; then
+      "${argv[@]}" 2>&1 | tee /dev/fd/3
+      rc=${PIPESTATUS[0]}
+    else
+      "${argv[@]}"
+      rc=$?
+    fi
+  else
+    "${argv[@]}"
+    rc=$?
+  fi
+
   if (( warn_on_fail )) && (( rc != 0 )); then
     warn "Command failed ($rc): $(_stringify_cmd "${argv[@]}")"
   fi
