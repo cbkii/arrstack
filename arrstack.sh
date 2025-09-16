@@ -45,45 +45,48 @@ die() {
 
 is_dry() { [[ "${DRY_RUN:-0}" == 1 ]]; }
 
+_stringify_cmd() {
+  local -a argv=("$@")
+  local cmd=""
+  for a in "${argv[@]}"; do
+    cmd+=" $(printf '%q' "$a")"
+  done
+  printf '%s' "${cmd# }"
+}
+
 _redact() {
   sed -E \
     -e 's/(GLUETUN_API_KEY=)[^ ]+/\1<REDACTED>/g' \
     -e 's/(OPENVPN_PASSWORD=)[^ ]+/\1<REDACTED>/g' \
-    -e 's/(OPENVPN_USER=)[^ ]+/\1<REDACTED>/g'
+    -e 's/(OPENVPN_USER=)[^ ]+/\1<REDACTED>/g' \
+    -e 's/(PROTON_PASS=)[^ ]+/\1<REDACTED>/g' \
+    -e 's/(PROTON_USER=)[^ ]+/\1<REDACTED>/g'
 }
 
 _log_cmd() {
   local -a argv=("$@")
-  {
-    printf '+'
-    for a in "${argv[@]}"; do printf ' %q' "$a"; done
-    printf '\n'
-  } | _redact >>"$LOG_FILE"
+  printf '+ %s\n' "$(_stringify_cmd "${argv[@]}")" | _redact >>"$LOG_FILE"
 }
 
-run() {
+_exec_cmd() {
+  local warn_on_fail=$1
+  shift || true
   local -a argv=("$@")
+  _log_cmd "${argv[@]}"
   if is_dry; then
-    _log_cmd "${argv[@]}"
     return 0
   fi
-  _log_cmd "${argv[@]}"
-  "${argv[@]}"
-  return $?
-}
-
-run_or_warn() {
-  local -a argv=("$@")
-  if is_dry; then
-    _log_cmd "${argv[@]}"
-    return 0
-  fi
-  _log_cmd "${argv[@]}"
   "${argv[@]}"
   local rc=$?
-  ((rc == 0)) || warn "Command failed ($rc): ${argv[*]}"
+  if (( warn_on_fail )) && (( rc != 0 )); then
+    warn "Command failed ($rc): $(_stringify_cmd "${argv[@]}")"
+  fi
   return $rc
 }
+
+run() { _exec_cmd 0 "$@"; }
+
+run_or_warn() { _exec_cmd 1 "$@"; }
 
 require_env() {
   local var=$1
@@ -207,6 +210,23 @@ compose_cmd() {
   run docker compose --project-name arrstack --env-file "$ARR_ENV_FILE" -f "${ARR_STACK_DIR}/docker-compose.yml" "$@"
 }
 
+docker_rm_if_exists() {
+  local name=$1
+  local -a ids=()
+  if ! mapfile -t ids < <(docker ps -aq --filter "name=${name}"); then
+    return 2
+  fi
+  if (( ${#ids[@]} == 0 )); then
+    return 1
+  fi
+  local id
+  for id in "${ids[@]}"; do
+    [[ -n "$id" ]] || continue
+    run_or_warn docker rm -f "$id" || return $?
+  done
+  return 0
+}
+
 stop_stack_if_present() {
   step "2/15 Stopping any existing stack"
   if [[ -f "${ARR_STACK_DIR}/docker-compose.yml" && -f "${ARR_ENV_FILE}" ]]; then
@@ -217,8 +237,17 @@ stop_stack_if_present() {
 }
 stop_named_containers() {
   note "Removing known containers"
-  # shellcheck disable=SC2015
-  for c in ${ALL_CONTAINERS}; do docker ps -a --format '{{.Names}}' | grep -q "^${c}$" && run_or_warn docker rm -f "$c"; done
+  local removed_any=0 rc
+  for c in ${ALL_CONTAINERS}; do
+    docker_rm_if_exists "$c"
+    rc=$?
+    case $rc in
+      0) removed_any=1 ;;
+      1) ;; # no container with this name
+      *) return $rc ;;
+    esac
+  done
+  (( removed_any )) || note "No known containers present"
 }
 clear_port_conflicts() {
   note "Clearing port conflicts"
@@ -320,14 +349,22 @@ purge_native_packages() {
 }
 final_docker_cleanup() {
   step "7/15 Final Docker cleanup pass"
+  local overall=0 rc
   for CONTAINER in ${ALL_CONTAINERS}; do
-    if docker ps -aq --filter "name=${CONTAINER}" | grep -q .; then
-      run_or_warn docker rm -f "$(docker ps -aq --filter "name=${CONTAINER}")"
-    else
-      note "No leftover ${CONTAINER}"
-    fi
+    docker_rm_if_exists "$CONTAINER"
+    rc=$?
+    case $rc in
+      0) ;;
+      1) note "No leftover ${CONTAINER}" ;;
+      *) overall=$rc ;;
+    esac
   done
-  ok "Docker containers cleaned"
+  if (( overall == 0 )); then
+    ok "Docker containers cleaned"
+  else
+    warn "Docker cleanup encountered issues"
+  fi
+  return $overall
 }
 
 # ---------------------------[ ARRCONF SECRETS ]--------------------------------
@@ -354,23 +391,33 @@ harden_arrconf() {
   fi
 }
 
+migrate_legacy_creds() {
+  local src=$1 label=${2:-$1}
+  [[ -f "$src" ]] || return 1
+  if run mv "$src" "${PROTON_AUTH_FILE}"; then
+    warn "Migrated legacy creds from ${label}"
+    return 0
+  fi
+  warn "Failed to migrate creds from ${label}"
+  return 2
+}
+
 ensure_proton_auth() {
   step "8/15 Ensuring Proton auth"
   harden_arrconf
   if [[ ! -f "${PROTON_AUTH_FILE}" ]]; then
-    if [[ -f "${LEGACY_CREDS_WG}" ]]; then
-      if run mv "${LEGACY_CREDS_WG}" "${PROTON_AUTH_FILE}"; then
-        warn "Migrated legacy creds from ${LEGACY_CREDS_WG}"
-      else
-        warn "Failed to migrate creds from ${LEGACY_CREDS_WG}"
-      fi
-    elif [[ -f "${LEGACY_CREDS_DOCKER}" ]]; then
-      if run mv "${LEGACY_CREDS_DOCKER}" "${PROTON_AUTH_FILE}"; then
-        warn "Migrated legacy creds from ${LEGACY_CREDS_DOCKER}"
-      else
-        warn "Failed to migrate creds from ${LEGACY_CREDS_DOCKER}"
-      fi
-    else
+    local migrated=0 rc
+    migrate_legacy_creds "${LEGACY_CREDS_WG}" "${LEGACY_CREDS_WG}"
+    rc=$?
+    if (( rc == 0 )); then
+      migrated=1
+    fi
+    if (( migrated == 0 )); then
+      migrate_legacy_creds "${LEGACY_CREDS_DOCKER}" "${LEGACY_CREDS_DOCKER}"
+      rc=$?
+      (( rc == 0 )) && migrated=1
+    fi
+    if (( migrated == 0 )); then
       atomic_write "${PROTON_AUTH_FILE}" "# Proton account credentials (do NOT include +pmp)\nPROTON_USER=\nPROTON_PASS=\n"
       warn "Created template ${PROTON_AUTH_FILE}; edit with your Proton credentials"
     fi
@@ -556,7 +603,7 @@ seed_wireguard_from_conf() {
   fi
 }
 
-ensure_qbt_conf() {
+ensure_qbt_conf_base() {
   local conf_dir="${ARR_DOCKER_DIR}/qbittorrent"
   local conf="${conf_dir}/qBittorrent.conf"
   install -d -m 0750 -o "${PUID}" -g "${PGID}" "${conf_dir}"
@@ -583,9 +630,14 @@ Downloads\\SavePath=${QBT_SAVE_PATH}
 Downloads\\TempPath=${QBT_TEMP_PATH}
 Downloads\\TempPathEnabled=true
 CONFEOF
-    chown "${PUID}:${PGID}" "${conf}"
-    chmod 0640 "${conf}"
   fi
+  chown "${PUID}:${PGID}" "${conf}"
+  chmod 0640 "${conf}"
+  printf '%s\n' "${conf}"
+}
+
+ensure_qbt_conf() {
+  ensure_qbt_conf_base >/dev/null
 }
 
 need() { command -v "$1" >/dev/null 2>&1 || {
@@ -626,28 +678,8 @@ derive_qbt_hash() {
 }
 
 write_qbt_conf_hash() {
-  local dir="${ARR_DOCKER_DIR}/qbittorrent"
-  local cfg="${dir}/qBittorrent.conf"
-  install -d -m 0750 -o "${PUID}" -g "${PGID}" "${dir}"
-  if [ ! -f "${cfg}" ]; then
-    cat >"${cfg}" <<'CONFEOF'
-[Preferences]
-WebUI\BypassLocalAuth=true
-WebUI\CSRFProtection=true
-WebUI\ClickjackingProtection=true
-WebUI\HostHeaderValidation=true
-WebUI\HTTPS\Enabled=false
-WebUI\Address=*
-WebUI\ServerDomains=*
-WebUI\Port=${QBT_WEBUI_PORT}
-Connection\UPnP=false
-Connection\UseUPnP=false
-Connection\UseNAT-PMP=false
-Downloads\SavePath=${QBT_SAVE_PATH}
-Downloads\TempPath=${QBT_TEMP_PATH}
-Downloads\TempPathEnabled=true
-CONFEOF
-  fi
+  local cfg
+  cfg="$(ensure_qbt_conf_base)" || return $?
 
   grep -q '^\[Preferences\]' "${cfg}" || printf '\n[Preferences]\n' >>"${cfg}"
 
@@ -994,7 +1026,7 @@ start_with_checks() {
     run_or_warn compose_cmd up -d gluetun
     run_or_warn compose_cmd ps
     run_or_warn docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-    if ! is_dry && ! docker ps --format '{{.Names}}' | grep -qx 'gluetun'; then
+    if ! is_dry && ! docker ps --format '{{.Names}}' | grep -q 'gluetun'; then
       die "Gluetun container failed to start"
     fi
     local max_wait=180
