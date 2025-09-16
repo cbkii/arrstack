@@ -524,7 +524,7 @@ write_gluetun_auth() {
   step "10/15 Writing Gluetun RBAC config"
   local AUTH_DIR="${ARR_DOCKER_DIR}/gluetun/auth"
   ensure_dir "$AUTH_DIR"
-  local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="readonly"\nauth="basic"\nusername="gluetun"\npassword="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/openvpn/status","GET /v1/wireguard/status","GET /v1/publicip/ip","GET /v1/openvpn/portforwarded"]\n'
+  local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="readonly"\nauth="basic"\nusername="gluetun"\npassword="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/openvpn/status","GET /v1/wireguard/status","GET /v1/publicip/ip","GET /v1/openvpn/portforwarded","POST /v1/openvpn/forwardport"]\n'
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
   run chmod 600 "${AUTH_DIR}/config.toml"
 }
@@ -785,7 +785,7 @@ YAML
     fi
     cat <<'YAML'
       VPN_PORT_FORWARDING: "on"
-      # VPN_PORT_FORWARDING_PROVIDER: protonvpn
+      VPN_PORT_FORWARDING_PROVIDER: protonvpn
       PORT_FORWARD_ONLY: "on"
       SERVER_COUNTRIES: "${SERVER_COUNTRIES}"
       # FREE_ONLY: "off"
@@ -799,6 +799,7 @@ YAML
       HTTP_CONTROL_SERVER_ADDRESS: "${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
       HTTP_CONTROL_SERVER_LOG: "off"
       HTTP_CONTROL_SERVER_AUTH_FILE: /gluetun/auth/config.toml
+      GLUETUN_API_KEY: ${GLUETUN_API_KEY}
       PUID: ${PUID}
       PGID: ${PGID}
     volumes:
@@ -815,9 +816,13 @@ YAML
     healthcheck:
       test: >
         sh -c '
-          curl -fsS http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip >/dev/null &&
-          curl -fsS http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status | grep -qi "running" &&
-          curl -fsS http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded | grep -Eq "^[1-9][0-9]{3,5}$"
+          AUTH="";
+          if [ -n "$${GLUETUN_API_KEY}" ]; then
+            AUTH="--user gluetun:$${GLUETUN_API_KEY}";
+          fi;
+          curl -fsS $$AUTH "http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
+          curl -fsS $$AUTH "http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running" &&
+          curl -fsS $$AUTH "http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "^[1-9][0-9]{3,5}$"
         '
       interval: 30s
       timeout: 15s
@@ -857,25 +862,42 @@ YAML
     environment:
       GLUETUN_CONTROL_HOST: ${GLUETUN_CONTROL_HOST}
       GLUETUN_CONTROL_PORT: ${GLUETUN_CONTROL_PORT}
+      GLUETUN_API_KEY: ${GLUETUN_API_KEY}
       QBT_WEBUI_PORT: ${QBT_WEBUI_PORT}
       QBT_USERNAME: ${QBT_USER:-}
       QBT_PASSWORD: ${QBT_PASS:-}
     depends_on:
+      gluetun:
+        condition: service_healthy
       qbittorrent:
         condition: service_healthy
-    restart: unless-stopped
     command: >
       sh -c '
         echo "[pf-sync] Starting PF-to-qB port synchroniser (adaptive 15-45s backoff)";
-        CUR=""
-        STATE="init"
-        LAST_SLEEP=""
-        WAIT_DEFAULT=45
-        WAIT_MIN=15
-        WAIT=$$WAIT_DEFAULT
-        LAST_BAD=""
+        API_ROOT="http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}";
+        AUTH_HEADER="";
+        if [ -n "$${GLUETUN_API_KEY}" ]; then
+          AUTH_HEADER="--user gluetun:$${GLUETUN_API_KEY}";
+        fi;
+        echo "[pf-sync] Waiting for Gluetun health before syncing...";
+        until curl -fsS $${AUTH_HEADER} "$${API_ROOT}/v1/openvpn/status" | grep -qi "running"; do
+          echo "[pf-sync] Gluetun not ready yet; retrying in 5s";
+          sleep 5;
+        done;
+        echo "[pf-sync] Waiting for qBittorrent API...";
+        until curl -fsS "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/version" >/dev/null 2>&1; do
+          echo "[pf-sync] qBittorrent not ready yet; retrying in 5s";
+          sleep 5;
+        done;
+        CUR="";
+        STATE="init";
+        LAST_SLEEP="";
+        WAIT_DEFAULT=45;
+        WAIT_MIN=15;
+        WAIT=$$WAIT_DEFAULT;
+        LAST_BAD="";
         while :; do
-          P=$$(curl -fsS http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded || true);
+          P=$$(curl -fsS $${AUTH_HEADER} "$${API_ROOT}/v1/openvpn/portforwarded" || true);
           if echo "$$P" | grep -Eq "^[1-9][0-9]{3,5}$"; then
             if [ "$$P" != "$$CUR" ]; then
               echo "[pf-sync] Applying Proton PF port $$P to qBittorrent";
@@ -890,14 +912,15 @@ YAML
                   "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
                   --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1;
               fi;
-              CUR="$$P"
+              CUR="$$P";
             fi;
+            curl -fsS $${AUTH_HEADER} -X POST "$${API_ROOT}/v1/openvpn/forwardport" >/dev/null 2>&1 || true;
             if [ "$$STATE" != "ready" ]; then
               echo "[pf-sync] PF port confirmed at $$P";
             fi;
-            STATE="ready"
-            LAST_BAD=""
-            WAIT=$$WAIT_DEFAULT
+            STATE="ready";
+            LAST_BAD="";
+            WAIT=$$WAIT_DEFAULT;
           else
             if [ "$$STATE" != "waiting" ] || [ "$$LAST_BAD" != "$$P" ]; then
               echo "[pf-sync] PF port not available yet (value='$$P')";
@@ -906,11 +929,11 @@ YAML
             STATE="waiting";
             LAST_BAD="$$P";
             if [ "$$PREV_STATE" != "waiting" ]; then
-              WAIT=$$WAIT_MIN
+              WAIT=$$WAIT_MIN;
             elif [ "$$WAIT" -lt "$$WAIT_DEFAULT" ]; then
-              WAIT=$$((WAIT * 2))
+              WAIT=$$((WAIT * 2));
               if [ "$$WAIT" -gt "$$WAIT_DEFAULT" ]; then
-                WAIT=$$WAIT_DEFAULT
+                WAIT=$$WAIT_DEFAULT;
               fi;
             fi;
           fi;
@@ -920,6 +943,20 @@ YAML
           fi;
           sleep "$$WAIT";
         done'
+    healthcheck:
+      test: >
+        sh -c '
+          AUTH="";
+          if [ -n "$${GLUETUN_API_KEY}" ]; then
+            AUTH="--user gluetun:$${GLUETUN_API_KEY}";
+          fi;
+          curl -fsS $$AUTH "http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "^[1-9][0-9]{3,5}$"
+        '
+      interval: 45s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -935,6 +972,8 @@ YAML
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
     depends_on:
+      gluetun:
+        condition: service_healthy
       prowlarr:
         condition: service_healthy
       qbittorrent:
@@ -961,6 +1000,8 @@ YAML
       - ${DOWNLOADS_DIR}:/downloads
       - ${COMPLETED_DIR}:/completed
     depends_on:
+      gluetun:
+        condition: service_healthy
       prowlarr:
         condition: service_healthy
       qbittorrent:
@@ -984,6 +1025,8 @@ YAML
     volumes:
       - ${ARR_DOCKER_DIR}/prowlarr:/config
     depends_on:
+      gluetun:
+        condition: service_healthy
       qbittorrent:
         condition: service_healthy
     healthcheck:
@@ -1008,6 +1051,8 @@ YAML
       - ${MOVIES_DIR}:/movies
       - ${SUBS_DIR}:/subs
     depends_on:
+      gluetun:
+        condition: service_healthy
       sonarr:
         condition: service_healthy
       radarr:
@@ -1027,6 +1072,8 @@ YAML
     environment:
       LOG_LEVEL: info
     depends_on:
+      gluetun:
+        condition: service_healthy
       prowlarr:
         condition: service_healthy
     healthcheck:
