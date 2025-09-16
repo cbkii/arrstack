@@ -63,7 +63,7 @@ SERVER_CC_PRIORITY="${SERVER_CC_PRIORITY:-Australia,Singapore,Japan,Hong Kong,Un
 DEFAULT_COUNTRY="${DEFAULT_COUNTRY:-Australia}"
 
 # Service/package lists used by uninstaller
-ALL_CONTAINERS="${ALL_CONTAINERS:-gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr byparr}"
+ALL_CONTAINERS="${ALL_CONTAINERS:-gluetun qbittorrent pf-sync sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr byparr}"
 ALL_NATIVE_SERVICES="${ALL_NATIVE_SERVICES:-sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common byparr}"
 ALL_PACKAGES="${ALL_PACKAGES:-sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common byparr}"
 
