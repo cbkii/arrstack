@@ -163,7 +163,7 @@ stop_stack() {
   step "Stopping Docker stack"
   for d in "${ARR_STACK_DIRS[@]}"; do
     if [[ -d "$d" ]]; then
-      (cd "$d" && docker compose down -v --remove-orphans >/dev/null 2>&1) || true
+      (cd "$d" && docker compose down -v --remove-orphans) || true
     fi
   done
   for c in ${ALL_CONTAINERS}; do
