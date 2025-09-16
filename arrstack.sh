@@ -211,16 +211,42 @@ compose_cmd() {
 }
 
 docker_rm_if_exists() {
-  local name=$1
-  local -a ids=()
-  if ! mapfile -t ids < <(docker ps -aq --filter "name=${name}"); then
+  local token=$1
+  local -a raw_ids=() exact_ids=() fallback_ids=() to_remove=()
+  if ! mapfile -t raw_ids < <(docker ps -aq --filter "name=${token}"); then
     return 2
   fi
-  if (( ${#ids[@]} == 0 )); then
+  if (( ${#raw_ids[@]} == 0 )); then
     return 1
   fi
-  local id
-  for id in "${ids[@]}"; do
+
+  local id cname
+  for id in "${raw_ids[@]}"; do
+    [[ -n "$id" ]] || continue
+    cname=$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null || true)
+    [[ -n "$cname" ]] || continue
+    cname=${cname#/}
+    if [[ "$cname" == "$token" ]]; then
+      exact_ids+=("$id")
+      continue
+    fi
+    if [[ "$cname" == *"-${token}"* || "$cname" == *"_${token}"* ]]; then
+      fallback_ids+=("$id")
+    fi
+  done
+
+  if (( ${#exact_ids[@]} )); then
+    to_remove=("${exact_ids[@]}")
+  elif (( ${#fallback_ids[@]} == 1 )); then
+    to_remove=("${fallback_ids[@]}")
+  elif (( ${#fallback_ids[@]} > 1 )); then
+    warn "Multiple containers match token '${token}'; skipping fallback removal"
+    return 4
+  else
+    return 1
+  fi
+
+  for id in "${to_remove[@]}"; do
     [[ -n "$id" ]] || continue
     run_or_warn docker rm -f "$id" || return $?
   done
@@ -745,36 +771,36 @@ services:
     env_file:
       - ${ARRCONF_DIR}/proton.env
     environment:
-      - TZ=${TIMEZONE}
-      - VPN_SERVICE_PROVIDER=protonvpn
-      - VPN_TYPE=${VPN_TYPE}
+      TZ: ${TIMEZONE}
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: ${VPN_TYPE}
 YAML
     if [ "${VPN_MODE}" = "wireguard" ]; then
       cat <<'YAML'
-      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
-      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
-      - WIREGUARD_MTU=${WIREGUARD_MTU}
-      - VPN_DNS_ADDRESS=${VPN_DNS_ADDRESS}
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES}
+      WIREGUARD_MTU: ${WIREGUARD_MTU}
+      VPN_DNS_ADDRESS: ${VPN_DNS_ADDRESS}
 YAML
     fi
     cat <<'YAML'
-      - VPN_PORT_FORWARDING=on
-      # - VPN_PORT_FORWARDING_PROVIDER=protonvpn
-      - PORT_FORWARD_ONLY=on
-      - SERVER_COUNTRIES="${SERVER_COUNTRIES}"
-      # - FREE_ONLY=off
+      VPN_PORT_FORWARDING: "on"
+      # VPN_PORT_FORWARDING_PROVIDER: protonvpn
+      PORT_FORWARD_ONLY: "on"
+      SERVER_COUNTRIES: "${SERVER_COUNTRIES}"
+      # FREE_ONLY: "off"
       # DNS & stability
-      - DOT=off
-      - UPDATER_PERIOD=${UPDATER_PERIOD}
-      - HEALTH_TARGET_ADDRESS=${GLUETUN_HEALTH_TARGET}
-      - HEALTH_VPN_DURATION_INITIAL=30s
-      - HEALTH_SUCCESS_WAIT_DURATION=10s
+      DOT: "off"
+      UPDATER_PERIOD: ${UPDATER_PERIOD}
+      HEALTH_TARGET_ADDRESS: ${GLUETUN_HEALTH_TARGET}
+      HEALTH_VPN_DURATION_INITIAL: 30s
+      HEALTH_SUCCESS_WAIT_DURATION: 10s
       # Control server (RBAC)
-      - HTTP_CONTROL_SERVER_ADDRESS="${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
-      - HTTP_CONTROL_SERVER_LOG=off
-      - HTTP_CONTROL_SERVER_AUTH_FILE=/gluetun/auth/config.toml
-      - PUID=${PUID}
-      - PGID=${PGID}
+      HTTP_CONTROL_SERVER_ADDRESS: "${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
+      HTTP_CONTROL_SERVER_LOG: "off"
+      HTTP_CONTROL_SERVER_AUTH_FILE: /gluetun/auth/config.toml
+      PUID: ${PUID}
+      PGID: ${PGID}
     volumes:
       - ${ARR_DOCKER_DIR}/gluetun:/gluetun
       - ${ARR_DOCKER_DIR}/gluetun/auth:/gluetun/auth
@@ -804,11 +830,11 @@ YAML
     container_name: qbittorrent
     network_mode: "service:gluetun"
     environment:
-      - WEBUI_PORT=${QBT_WEBUI_PORT}
-      - DOCKER_MODS=ghcr.io/gabe565/linuxserver-mod-vuetorrent
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TIMEZONE}
+      WEBUI_PORT: ${QBT_WEBUI_PORT}
+      DOCKER_MODS: ghcr.io/gabe565/linuxserver-mod-vuetorrent
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/qbittorrent:/config
       - ${DOWNLOADS_DIR}:/downloads
@@ -829,18 +855,25 @@ YAML
     container_name: pf-sync
     network_mode: "service:gluetun"
     environment:
-      - GLUETUN_CONTROL_HOST=${GLUETUN_CONTROL_HOST}
-      - QBT_WEBUI_PORT=${QBT_WEBUI_PORT}
-      - QBT_USERNAME=${QBT_USER:-}
-      - QBT_PASSWORD=${QBT_PASS:-}
+      GLUETUN_CONTROL_HOST: ${GLUETUN_CONTROL_HOST}
+      GLUETUN_CONTROL_PORT: ${GLUETUN_CONTROL_PORT}
+      QBT_WEBUI_PORT: ${QBT_WEBUI_PORT}
+      QBT_USERNAME: ${QBT_USER:-}
+      QBT_PASSWORD: ${QBT_PASS:-}
     depends_on:
       qbittorrent:
         condition: service_healthy
     restart: unless-stopped
     command: >
       sh -c '
-        echo "[pf-sync] Starting PF-to-qB port synchroniser (polling every 45s)";
-        CUR="";
+        echo "[pf-sync] Starting PF-to-qB port synchroniser (adaptive 15-45s backoff)";
+        CUR=""
+        STATE="init"
+        LAST_SLEEP=""
+        WAIT_DEFAULT=45
+        WAIT_MIN=15
+        WAIT=$$WAIT_DEFAULT
+        LAST_BAD=""
         while :; do
           P=$$(curl -fsS http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded || true);
           if echo "$$P" | grep -Eq "^[1-9][0-9]{3,5}$"; then
@@ -857,13 +890,35 @@ YAML
                   "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
                   --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1;
               fi;
-              CUR="$$P";
-            fi
+              CUR="$$P"
+            fi;
+            if [ "$$STATE" != "ready" ]; then
+              echo "[pf-sync] PF port confirmed at $$P";
+            fi;
+            STATE="ready"
+            LAST_BAD=""
+            WAIT=$$WAIT_DEFAULT
           else
-            echo "[pf-sync] PF port not available yet (value='$$P')";
-          fi
-          echo "[pf-sync] Sleeping 45s before next check";
-          sleep 45;
+            if [ "$$STATE" != "waiting" ] || [ "$$LAST_BAD" != "$$P" ]; then
+              echo "[pf-sync] PF port not available yet (value='$$P')";
+            fi;
+            PREV_STATE=$$STATE;
+            STATE="waiting";
+            LAST_BAD="$$P";
+            if [ "$$PREV_STATE" != "waiting" ]; then
+              WAIT=$$WAIT_MIN
+            elif [ "$$WAIT" -lt "$$WAIT_DEFAULT" ]; then
+              WAIT=$$((WAIT * 2))
+              if [ "$$WAIT" -gt "$$WAIT_DEFAULT" ]; then
+                WAIT=$$WAIT_DEFAULT
+              fi;
+            fi;
+          fi;
+          if [ "$$LAST_SLEEP" != "$${WAIT}:$${STATE}" ]; then
+            echo "[pf-sync] Sleeping $${WAIT}s before next check";
+            LAST_SLEEP="$${WAIT}:$${STATE}";
+          fi;
+          sleep "$$WAIT";
         done'
 
   sonarr:
@@ -871,9 +926,9 @@ YAML
     container_name: sonarr
     network_mode: "service:gluetun"
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/sonarr:/config
       - ${TV_DIR}:/tv
@@ -897,9 +952,9 @@ YAML
     container_name: radarr
     network_mode: "service:gluetun"
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/radarr:/config
       - ${MOVIES_DIR}:/movies
@@ -923,9 +978,9 @@ YAML
     container_name: prowlarr
     network_mode: "service:gluetun"
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/prowlarr:/config
     depends_on:
@@ -944,9 +999,9 @@ YAML
     container_name: bazarr
     network_mode: "service:gluetun"
     environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TIMEZONE}
     volumes:
       - ${ARR_DOCKER_DIR}/bazarr:/config
       - ${TV_DIR}:/tv
@@ -970,7 +1025,7 @@ YAML
     container_name: flaresolverr
     network_mode: "service:gluetun"
     environment:
-      - LOG_LEVEL=info
+      LOG_LEVEL: info
     depends_on:
       prowlarr:
         condition: service_healthy
@@ -1053,6 +1108,8 @@ start_with_checks() {
     RETRY=$((RETRY + 1))
   done
   if [[ "$HEALTH" != healthy ]]; then
+    warn "Troubleshooting hint: docker exec gluetun curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status"
+    warn "Troubleshooting hint: docker exec gluetun curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded"
     die "Gluetun did not achieve connectivity; check: docker logs gluetun"
   fi
   compose_cmd up -d qbittorrent pf-sync prowlarr sonarr radarr bazarr flaresolverr || die "Failed to start stack"
