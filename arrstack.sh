@@ -166,6 +166,10 @@ parse_args() {
       --wireguard)
         VPN_TYPE="wireguard"
         ;;
+      -y|--yes)
+        ASSUME_YES=1
+        export ASSUME_YES
+        ;;
     esac
     shift
   done
@@ -234,6 +238,67 @@ lan_access_host() {
   fi
 }
 
+# ----------------------------[ PREFLIGHT ]-------------------------------------
+confirm_or_die() {
+  if [ "${ASSUME_YES:-0}" = "1" ]; then
+    return 0
+  fi
+  printf 'Proceed with installation? [y/N]: ' >&3
+  read -r ans
+  case "$ans" in
+    y|Y|yes|YES) return 0 ;;
+    *) die "Aborted by user" ;;
+  esac
+}
+
+preflight() {
+  step "0a/15 Preflight checks"
+  hydrate_vpn_type_from_env
+  if [[ -z "${VPN_TYPE:-}" ]]; then
+    VPN_TYPE="${DEFAULT_VPN_TYPE}"
+    export VPN_TYPE
+  fi
+  ensure_proton_auth_core
+  PREFLIGHT_ENSURED_PROTON_AUTH=1
+  ensure_lan_ip_binding
+  warn_lan_ip
+
+  local resolved="${VPN_TYPE}" fallback_used=0
+  while :; do
+    case "${resolved}" in
+      openvpn)
+        if ! grep -Eq '^PROTON_USER=[^#[:space:]].*' "${PROTON_AUTH_FILE}" 2>/dev/null \
+           || ! grep -Eq '^PROTON_PASS=[^#[:space:]].*' "${PROTON_AUTH_FILE}" 2>/dev/null; then
+          die "VPN_TYPE=openvpn but PROTON_USER/PROTON_PASS not set in ${PROTON_AUTH_FILE}. Edit it (username WITHOUT +pmp) and re-run."
+        fi
+        break
+        ;;
+      wireguard)
+        if ! find_wg_conf "proton.conf" >/dev/null 2>&1; then
+          die "VPN_TYPE=wireguard but proton.conf not found in ${ARRCONF_DIR}, ${ARR_DOCKER_DIR}/gluetun or ${LEGACY_VPNCONFS_DIR}."
+        fi
+        break
+        ;;
+      *)
+        if (( fallback_used )); then
+          die "Unsupported VPN_TYPE value '${resolved}'. Check your configuration."
+        fi
+        warn "Unknown VPN_TYPE='${resolved}'. Falling back to DEFAULT_VPN_TYPE='${DEFAULT_VPN_TYPE}'."
+        resolved="${DEFAULT_VPN_TYPE}"
+        VPN_TYPE="${resolved}"
+        export VPN_TYPE
+        fallback_used=1
+        ;;
+    esac
+  done
+
+  note "Summary:"
+  note "  • VPN_TYPE=${VPN_TYPE}"
+  note "  • LAN_IP=${LAN_IP}   Control: ${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT:-8000}"
+  note "  • WebUI host port (qB): ${QBT_HTTP_PORT_HOST}  internal: ${QBT_WEBUI_PORT}"
+  confirm_or_die
+}
+
 # ----------------------------[ PRECHECKS ]-------------------------------------
 check_deps() {
   step "1/15 Checking prerequisites"
@@ -242,7 +307,6 @@ check_deps() {
   local pkgs=()
   command -v docker >/dev/null 2>&1 || pkgs+=(docker.io)
   docker compose version >/dev/null 2>&1 || pkgs+=(docker-compose-plugin)
-  command -v wget >/dev/null 2>&1 || pkgs+=(wget)
   command -v curl >/dev/null 2>&1 || pkgs+=(curl)
   command -v ss >/dev/null 2>&1 || pkgs+=(iproute2)
   command -v openssl >/dev/null 2>&1 || pkgs+=(openssl)
@@ -253,7 +317,7 @@ check_deps() {
     run_or_warn sudo apt-get install -y "${pkgs[@]}"
   fi
 
-  for b in docker wget curl ss openssl xxd; do
+  for b in docker curl ss openssl xxd; do
     command -v "$b" >/dev/null 2>&1 || die "Missing dependency: $b"
   done
   docker compose version >/dev/null 2>&1 || die "Docker Compose v2 not available"
@@ -483,8 +547,7 @@ migrate_legacy_creds() {
   return 2
 }
 
-ensure_proton_auth() {
-  step "8/15 Ensuring Proton auth"
+ensure_proton_auth_core() {
   harden_arrconf
   if [[ ! -f "${PROTON_AUTH_FILE}" ]]; then
     local migrated=0 rc
@@ -506,6 +569,15 @@ ensure_proton_auth() {
     ok "Found ${PROTON_AUTH_FILE}"
   fi
   run chmod 600 "${PROTON_AUTH_FILE}" || run_or_warn sudo chmod 600 "${PROTON_AUTH_FILE}"
+}
+ensure_proton_auth() {
+  step "8/15 Ensuring Proton auth"
+  if [[ "${PREFLIGHT_ENSURED_PROTON_AUTH:-0}" = "1" ]]; then
+    ok "Proton auth already ensured during preflight"
+    return
+  fi
+  ensure_proton_auth_core
+  PREFLIGHT_ENSURED_PROTON_AUTH=1
 }
 ensure_pmp() {
   local u="$1"
@@ -872,7 +944,7 @@ YAML
       - ${ARR_DOCKER_DIR}/gluetun:/gluetun
       - ${ARR_DOCKER_DIR}/gluetun/auth:/gluetun/auth
     ports:
-      - "${LAN_IP:-0.0.0.0}:${GLUETUN_CONTROL_PORT:-8000}:${GLUETUN_CONTROL_PORT:-8000}"          # Gluetun control API via lan_access_host
+      - "${LAN_IP:-0.0.0.0}:${GLUETUN_CONTROL_PORT:-8000}:${GLUETUN_CONTROL_PORT:-8000}"          # Gluetun control API host bind (LAN_IP); clients use lan_access_host()
       - "${LAN_IP:-0.0.0.0}:${QBT_HTTP_PORT_HOST:-8081}:${QBT_WEBUI_PORT:-8080}"   # qB WebUI via gluetun namespace
       - "${LAN_IP:-0.0.0.0}:${SONARR_PORT:-8989}:${SONARR_PORT:-8989}"                    # Sonarr
       - "${LAN_IP:-0.0.0.0}:${RADARR_PORT:-7878}:${RADARR_PORT:-7878}"                    # Radarr
@@ -983,7 +1055,7 @@ YAML
             *:*) P=$${RAW##*:} ;;
             *)   P="$$RAW" ;;
           esac
-          if printf '%s' "$$P" | grep -Eq "^[1-9][0-9]{4,5}$"; then
+          if printf '%s' "$$P" | grep -Eq "^[1-9][0-9]{3,4}$"; then
             if [ "$$P" != "$$CUR" ]; then
               echo "[pf-sync] Applying Proton PF port $$P to qBittorrent";
               if [ -n "$${QBT_USERNAME}" ] && [ -n "$${QBT_PASSWORD}" ]; then
@@ -1035,7 +1107,7 @@ YAML
           if [ -n "$${GLUETUN_API_KEY}" ]; then
             AUTH="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl -fsS $$AUTH "http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "(^|:)[1-9][0-9]{4,5}$"
+          curl -fsS $$AUTH "http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "(^|:)[1-9][0-9]{3,4}$"
         '
       interval: 45s
       timeout: 10s
@@ -1218,18 +1290,24 @@ start_with_checks() {
     fi
     note "Waiting for gluetun to report healthy (up to ${max_wait}s)..."
     local waited=0 HEALTH="unknown" IP="" PF="" pf_raw=""
+    local ctrl_host="${GLUETUN_CONTROL_HOST:-127.0.0.1}"
+    local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+    local -a curl_cmd=(curl -fsS)
+    if [ -n "${GLUETUN_API_KEY:-}" ]; then
+      curl_cmd+=(--user "gluetun:${GLUETUN_API_KEY}")
+    fi
     while [[ $waited -lt ${max_wait} ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
-      IP="$(docker exec gluetun wget -qO- "http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" 2>/dev/null || true)"
+      IP="$("${curl_cmd[@]}" "http://${ctrl_host}:${ctrl_port}/v1/publicip/ip" 2>/dev/null || true)"
       if (( requires_pf )); then
-        pf_raw="$(docker exec gluetun wget -qO- "http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" 2>/dev/null || true)"
+        pf_raw="$("${curl_cmd[@]}" "http://${ctrl_host}:${ctrl_port}/v1/openvpn/portforwarded" 2>/dev/null || true)"
         pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
         PF=""
         case "$pf_raw" in
           *:*) PF="${pf_raw##*:}" ;;
           *)   PF="$pf_raw" ;;
         esac
-        if ! printf '%s' "$PF" | grep -Eq '^[1-9][0-9]{4,5}$'; then
+        if ! printf '%s' "$PF" | grep -Eq '^[1-9][0-9]{3,4}$'; then
           PF=""
         fi
       fi
@@ -1266,16 +1344,20 @@ start_with_checks() {
   run_or_warn compose_cmd ps
   local ip pf_port="" client_host
   client_host="$(lan_access_host)"
-  ip="$(wget -qO- "http://${client_host}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" || true)"
+  local -a post_curl=(curl -fsS)
+  if [ -n "${GLUETUN_API_KEY:-}" ]; then
+    post_curl+=(--user "gluetun:${GLUETUN_API_KEY}")
+  fi
+  ip="$("${post_curl[@]}" "http://${client_host}:${GLUETUN_CONTROL_PORT:-8000}/v1/publicip/ip" 2>/dev/null || true)"
   note "Public IP: ${ip}"
   if (( requires_pf )); then
-    pf_raw="$(wget -qO- "http://${client_host}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" || true)"
+    pf_raw="$("${post_curl[@]}" "http://${client_host}:${GLUETUN_CONTROL_PORT:-8000}/v1/openvpn/portforwarded" 2>/dev/null || true)"
     pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
     case "$pf_raw" in
       *:*) pf_port="${pf_raw##*:}" ;;
       *)   pf_port="$pf_raw" ;;
     esac
-    if printf '%s' "$pf_port" | grep -Eq '^[1-9][0-9]{4,5}$'; then
+    if printf '%s' "$pf_port" | grep -Eq '^[1-9][0-9]{3,4}$'; then
       if [[ "$pf_raw" != "$pf_port" && -n "$pf_raw" ]]; then
         note "Forwarded port: ${pf_port} (${pf_raw})"
       else
@@ -1323,6 +1405,7 @@ main() {
   parse_args "$@"
   SCRIPT_START=$(date +%s)
   step "0/15 ARR+VPN merged installer"
+  preflight
   check_deps
   stop_stack_if_present
   stop_named_containers
@@ -1337,9 +1420,6 @@ main() {
   final_docker_cleanup
   ensure_proton_auth
   make_gluetun_apikey
-  hydrate_vpn_type_from_env
-  ensure_lan_ip_binding
-  warn_lan_ip
   write_gluetun_auth
   write_env
   seed_wireguard_from_conf
