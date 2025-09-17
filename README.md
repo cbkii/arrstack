@@ -141,8 +141,28 @@ The installer creates these paths if they do not exist; adjust overrides in `arr
 
 ### 11) Troubleshooting
 ```bash
-# Check Gluetun container health
-docker inspect gluetun --format '{{.State.Health.Status}}'
+git mv arrconf/userconf.sh arrconf/userconf.defaults.sh
+git commit -m "Track defaults; make userconf.sh user-local"
+cp arrconf/userconf.defaults.sh arrconf/userconf.sh
+printf "arrconf/userconf.sh\n" >> .gitignore
+git add .gitignore arrconf/userconf.defaults.sh
+git commit -m "Ignore userconf.sh; load defaults then overrides"
+```
+
+## Command-line flags & automation
+
+You can steer the installer from the command line when you need to override defaults or run unattended:
+
+- `--openvpn` — force the next run to pin `VPN_TYPE=openvpn` before writing `.env` or Compose files.
+- `--wireguard` — switch to the WireGuard profile (no Proton port forwarding) for this run.
+- `-y`, `--yes` — run non-interactively and auto-confirm the safety prompt (sets both `ASSUME_YES=1` and `ARR_NONINTERACTIVE=1` for this run). Exporting `ASSUME_YES=1` alone only skips the final confirmation; pair it with `--no-prompt` if you also want the other prompts suppressed.
+- `--no-prompt`, `--non-interactive` — disable interactive prompts (defaults to reusing any existing Gluetun API key). Pair with `--rotate-apikey` when automation needs a fresh key.
+- `--rotate-apikey`, `--rotate-api-key`, `--rotate-key` — regenerate `GLUETUN_API_KEY` on the next run, even if a key already exists.
+- `-h`, `--help` — print available flags, subcommands, and examples, then exit.
+
+The preflight always prefers the password stored in `gluetun/auth/config.toml` when `.env` and the TOML disagree, prints a warning, and syncs both files to that value. Interactive runs then show a masked preview and let you reuse or rotate; non-interactive runs keep the existing key unless you explicitly pass a rotate flag.
+
+Subcommands still work as before — for example `./arrstack.sh conf-diff` compares `userconf.sh` to the latest defaults and exits.
 
 # Query public IP via Gluetun control API
 auth="--user gluetun:${GLUETUN_API_KEY}"  # omit if API key empty (WireGuard without RBAC is not allowed)
