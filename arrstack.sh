@@ -137,6 +137,8 @@ export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP LOCALHOST_ADDR LOCALHOST_NAME GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE UPDATER_PERIOD
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_TYPE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
+
+LAN_IP_ALL_INTERFACES=0
 # ----------------------------[ LOGGING ]---------------------------------------
 ts() {
   local now diff
@@ -212,6 +214,16 @@ have_ip() {
   local needle="$1"
   [[ -n "${needle}" ]] || return 1
   ip -o -4 addr show | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "$needle"
+}
+
+is_private_ipv4() {
+  local ip="$1"
+  case "$ip" in
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
+      return 0 ;;
+    *)
+      return 1 ;;
+  esac
 }
 
 ensure_lan_ip_binding() {
@@ -741,7 +753,50 @@ WIREGUARD_MTU=1320"
 warn_lan_ip() {
   if [ "${LAN_IP}" = "0.0.0.0" ]; then
     warn "LAN_IP is set to 0.0.0.0 — this would expose the Gluetun API publicly. Set LAN_IP to your LAN interface IP (e.g. 192.168.1.10) for LAN-only access."
+    LAN_IP_ALL_INTERFACES=1
+  elif [[ -n "${LAN_IP}" ]] && ! is_private_ipv4 "${LAN_IP}"; then
+    warn "LAN_IP=${LAN_IP} is not an RFC1918 address; ensure you intend to expose the Gluetun API beyond your LAN."
   fi
+}
+
+verify_gluetun_control_security() {
+  local ctrl_port host_bind access_host auth_file scope="LAN-only"
+  ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+  host_bind="${LAN_IP:-0.0.0.0}"
+  access_host="$(lan_access_host)"
+  auth_file="${ARR_DOCKER_DIR}/gluetun/auth/config.toml"
+
+  if [[ -z "${GLUETUN_API_KEY:-}" ]]; then
+    die "GLUETUN_API_KEY is empty; refusing to start Gluetun control API without RBAC."
+  fi
+
+  if ! is_dry; then
+    if [ ! -s "${auth_file}" ]; then
+      die "Gluetun RBAC config missing at ${auth_file}; remove ${ARR_DOCKER_DIR}/gluetun/auth and re-run the installer."
+    fi
+  else
+    note "[DRY] Skipping RBAC config presence check (dry run)."
+  fi
+
+  if [[ "${host_bind}" = "0.0.0.0" ]]; then
+    scope="all host interfaces"
+  elif ! is_private_ipv4 "${host_bind}"; then
+    scope="non-RFC1918 (public)"
+  fi
+
+  note "Control API mapping: container 0.0.0.0:${ctrl_port} → host ${host_bind}:${ctrl_port} (${scope})."
+  if [[ "${host_bind}" = "0.0.0.0" && "${LAN_IP_ALL_INTERFACES:-0}" != "1" ]]; then
+    warn "LAN_IP resolved to 0.0.0.0 — update arrconf/userconf.sh to pin it to your LAN adapter for tighter exposure."
+  elif [[ "${scope}" = "non-RFC1918 (public)" ]]; then
+    warn "Set LAN_IP to an RFC1918 address (e.g. 192.168.x.x, 10.x.x.x, 172.16-31.x.x) to keep the control API LAN-scoped."
+  fi
+
+  local key_len=${#GLUETUN_API_KEY}
+  if (( key_len < 24 )); then
+    warn "GLUETUN_API_KEY length (${key_len}) is shorter than recommended (>=24). Consider regenerating it."
+  fi
+  note "RBAC: enabled via ${auth_file} (API key length ${key_len})."
+  note "Access from host: http://${access_host}:${ctrl_port}/v1/publicip/ip"
 }
 
 # Populate WireGuard variables from a Proton .conf and fail if malformed when VPN_TYPE=wireguard
@@ -934,7 +989,7 @@ YAML
       HEALTH_VPN_DURATION_INITIAL: 30s
       HEALTH_SUCCESS_WAIT_DURATION: 10s
       # Control server (RBAC)
-      HTTP_CONTROL_SERVER_ADDRESS: "${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}"
+      HTTP_CONTROL_SERVER_ADDRESS: "0.0.0.0:${GLUETUN_CONTROL_PORT}"
       HTTP_CONTROL_SERVER_LOG: "off"
       HTTP_CONTROL_SERVER_AUTH_FILE: /gluetun/auth/config.toml
       GLUETUN_API_KEY: ${GLUETUN_API_KEY}
@@ -958,15 +1013,15 @@ YAML
           if [ -n "$${GLUETUN_API_KEY}" ]; then
             AUTH="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl -fsS $$AUTH "http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
+          curl -fsS $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
 YAML
     if [ "${VPN_TYPE}" = "openvpn" ]; then
       cat <<'YAML'
-          curl -fsS $$AUTH "http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
+          curl -fsS $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
 YAML
     else
       cat <<'YAML'
-          curl -fsS $$AUTH "http://${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
+          curl -fsS $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
 YAML
     fi
     cat <<'YAML'
@@ -1271,6 +1326,7 @@ pull_images() {
 start_with_checks() {
   step "14/15 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
+  verify_gluetun_control_security
   local MAX_RETRIES=5 RETRY=0 requires_pf
   requires_pf="$([ "${VPN_TYPE}" = "openvpn" ] && echo 1 || echo 0)"
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
@@ -1290,7 +1346,8 @@ start_with_checks() {
     fi
     note "Waiting for gluetun to report healthy (up to ${max_wait}s)..."
     local waited=0 HEALTH="unknown" IP="" PF="" pf_raw=""
-    local ctrl_host="${GLUETUN_CONTROL_HOST:-127.0.0.1}"
+    local ctrl_host
+    ctrl_host="$(lan_access_host)"
     local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
     local -a curl_cmd=(curl -fsS)
     if [ -n "${GLUETUN_API_KEY:-}" ]; then
