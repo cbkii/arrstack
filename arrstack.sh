@@ -342,6 +342,25 @@ mask_key() {
   fi
 }
 
+is_valid_gluetun_key() {
+  local key="${1:-}"
+  [[ -n "$key" ]] || return 1
+  [[ ${#key} -ge 32 ]] || return 1
+  [[ "$key" =~ ^[A-Za-z0-9+/=]+$ ]] || return 1
+  return 0
+}
+
+generate_local_gluetun_key() {
+  local key="" rc=0
+  local -a cmd=(openssl rand -base64 48)
+  _log_cmd "${cmd[@]}"
+  key="$("${cmd[@]}" | tr -d '\r\n')" || rc=$?
+  if (( rc != 0 )) || ! is_valid_gluetun_key "$key"; then
+    return 1
+  fi
+  printf '%s' "$key"
+}
+
 read_tty() {
   local prompt="$1" var="$2" ans=""
   if [ -t 0 ] && [ -r /dev/tty ]; then
@@ -839,6 +858,12 @@ make_gluetun_apikey() {
     previous="$(grep -E '^GLUETUN_API_KEY=' "${ARR_ENV_FILE}" | tail -n1 | cut -d= -f2- | tr -d '"\r\n' || true)"
   fi
 
+  if [[ -n "${previous}" ]] && ! is_valid_gluetun_key "${previous}"; then
+    warn "Existing GLUETUN_API_KEY is malformed; generating a fresh key."
+    previous=""
+    need_new=1
+  fi
+
   if [[ "${FORCE_ROTATE_API_KEY:-0}" = "1" ]]; then
     need_new=1
   elif [[ -z "${previous}" ]]; then
@@ -846,26 +871,39 @@ make_gluetun_apikey() {
   fi
 
   if (( need_new )); then
-    local tmp=/tmp/gl_apikey.$$
-    if run docker run --rm ghcr.io/qdm12/gluetun genkey >"${tmp}"; then
-      :
-    else
-      warn "docker-based API key generation failed; falling back to openssl."
-      run openssl rand -base64 48 >"${tmp}" || die "Failed to generate Gluetun API key with openssl."
+    if is_dry; then
+      GLUETUN_API_KEY="${previous:-BASE64PLACEHOLDERAAAAAAAAAAAAAAAAAAAAAA==}"
+      export GLUETUN_API_KEY
+      ok "[DRY] Using placeholder API key (length ${#GLUETUN_API_KEY})"
+      return
     fi
-    GLUETUN_API_KEY="$(tr -d '\r\n' <"${tmp}")"
-    rm -f "${tmp}"
-    if [[ -z "${GLUETUN_API_KEY}" ]]; then
-      die "Generated Gluetun API key is empty."
+
+    local generated="" rc=0
+    local -r gluetun_image="qmcgaw/gluetun:v3.38.0"
+    if command -v docker >/dev/null 2>&1; then
+      if ! docker image inspect "${gluetun_image}" >/dev/null 2>&1; then
+        _log_cmd docker pull "${gluetun_image}"
+        docker pull "${gluetun_image}" >/dev/null 2>&1 || true
+      fi
+      local -a genkey_cmd=(docker run --rm "${gluetun_image}" genkey)
+      _log_cmd "${genkey_cmd[@]}"
+      generated="$("${genkey_cmd[@]}" 2>/dev/null | tail -n1 | tr -d '\r\n')" || rc=$?
+      if (( rc != 0 )) || ! is_valid_gluetun_key "${generated}"; then
+        generated=""
+      fi
     fi
-    if [[ -n "${previous}" && "${GLUETUN_API_KEY}" = "${previous}" ]]; then
+
+    if [[ -z "${generated}" ]]; then
+      warn "docker-based API key generation failed or is unavailable; falling back to openssl."
+      generated="$(generate_local_gluetun_key)" || die "Failed to generate Gluetun API key with openssl."
+    fi
+
+    if [[ -n "${previous}" && "${generated}" = "${previous}" ]]; then
       warn "Generated API key matched existing value; regenerating locally."
-      tmp=/tmp/gl_apikey.$$-regen
-      run openssl rand -base64 48 >"${tmp}" || die "Failed to regenerate Gluetun API key with openssl."
-      GLUETUN_API_KEY="$(tr -d '\r\n' <"${tmp}")"
-      rm -f "${tmp}"
-      [[ -n "${GLUETUN_API_KEY}" ]] || die "Regenerated Gluetun API key is empty."
+      generated="$(generate_local_gluetun_key)" || die "Failed to regenerate Gluetun API key with openssl."
     fi
+
+    GLUETUN_API_KEY="${generated}"
     export GLUETUN_API_KEY
     ok "Generated new API key (length ${#GLUETUN_API_KEY})"
   else
@@ -878,7 +916,23 @@ write_gluetun_auth() {
   step "10/15 Writing Gluetun RBAC config"
   local AUTH_DIR="${ARR_DOCKER_DIR}/gluetun/auth"
   ensure_dir "$AUTH_DIR"
-  local toml='# Gluetun Control-Server RBAC config\n[[roles]]\nname="readonly"\nauth="basic"\nusername="gluetun"\npassword="'"${GLUETUN_API_KEY}"'\nroutes=["GET /v1/openvpn/status","GET /v1/wireguard/status","GET /v1/publicip/ip","GET /v1/openvpn/portforwarded","POST /v1/openvpn/forwardport"]\n'
+  local toml
+  toml=$(cat <<EOF
+# Gluetun Control-Server RBAC config
+[[roles]]
+name="readonly"
+auth="basic"
+username="gluetun"
+password="${GLUETUN_API_KEY}"
+routes=[
+  "GET /v1/openvpn/status",
+  "GET /v1/wireguard/status",
+  "GET /v1/publicip/ip",
+  "GET /v1/openvpn/portforwarded",
+  "POST /v1/openvpn/forwardport"
+]
+EOF
+)
   atomic_write "${AUTH_DIR}/config.toml" "$toml"
   run chmod 600 "${AUTH_DIR}/config.toml"
 }
