@@ -1346,7 +1346,8 @@ start_with_checks() {
     fi
     note "Waiting for gluetun to report healthy (up to ${max_wait}s)..."
     local waited=0 HEALTH="unknown" IP="" PF="" pf_raw=""
-    local ctrl_host="$(lan_access_host)"
+    local ctrl_host
+    ctrl_host="$(lan_access_host)"
     local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
     local -a curl_cmd=(curl -fsS)
     if [ -n "${GLUETUN_API_KEY:-}" ]; then
