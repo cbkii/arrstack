@@ -20,7 +20,24 @@ if [ -f "${REPO_ROOT}/arrconf/userconf.sh" ]; then
   . "${REPO_ROOT}/arrconf/userconf.sh"
 fi
 
-LOG_FILE=${LOG_FILE:-/dev/null}
+umask 077
+export HISTFILE=/dev/null
+set +o history 2>/dev/null || true
+
+: "${DEBUG:=0}"
+: "${KEEP_LOG:=0}"
+
+export DEBUG KEEP_LOG
+
+USER_LOG_FILE_ENV="${LOG_FILE:-}"
+LOG_FILE=/dev/null
+TMP_LOG=""
+DEST_LOG=""
+
+if [[ "${DEBUG}" == "1" ]]; then
+  KEEP_LOG=1
+  export KEEP_LOG
+fi
 if [[ "${NO_COLOR:-0}" -eq 0 && -t 1 ]]; then
   C_RESET=$'\033[0m'
   C_BOLD=$'\033[1m'
@@ -140,6 +157,63 @@ export DEFAULT_VPN_TYPE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
 
 LAN_IP_ALL_INTERFACES=0
 # ----------------------------[ LOGGING ]---------------------------------------
+log_dest_is_allowed() {
+  local candidate="$1"
+  local arr_dir="${ARR_STACK_DIR%/}"
+  if [[ -z "$arr_dir" ]]; then
+    arr_dir="${ARR_STACK_DIR}"
+  fi
+  [[ -n "$candidate" ]] || return 1
+  [[ "$candidate" == /* ]] || return 1
+  [[ -n "$arr_dir" ]] || return 1
+  [[ "$arr_dir" == /* ]] || return 1
+  case "$candidate" in
+    "$arr_dir"/*) return 0 ;;
+  esac
+  return 1
+}
+
+setup_logging() {
+  if [[ "${DEBUG}" != "1" ]]; then
+    LOG_FILE=/dev/null
+    TMP_LOG=""
+    DEST_LOG=""
+    export LOG_FILE
+    return
+  fi
+
+  local tmp=""
+  if tmp=$(mktemp -p /dev/shm arrstack.XXXXXX.log 2>/dev/null); then
+    :
+  elif tmp=$(mktemp /tmp/arrstack.XXXXXX.log 2>/dev/null); then
+    :
+  else
+    die "Unable to create temporary log file"
+  fi
+
+  chmod 600 "$tmp" || die "Unable to secure temporary log file"
+  TMP_LOG="$tmp"
+  LOG_FILE="$TMP_LOG"
+
+  local dest="" arr_dir="${ARR_STACK_DIR%/}"
+  if [[ -z "$arr_dir" ]]; then
+    arr_dir="${ARR_STACK_DIR}"
+  fi
+  if [[ -n "${LOG_FILE_DEST:-}" ]] && log_dest_is_allowed "$LOG_FILE_DEST"; then
+    dest="$LOG_FILE_DEST"
+  elif [[ -n "$USER_LOG_FILE_ENV" ]] && log_dest_is_allowed "$USER_LOG_FILE_ENV"; then
+    dest="$USER_LOG_FILE_ENV"
+  else
+    [[ -n "$arr_dir" ]] || die "ARR_STACK_DIR is not set"
+    [[ "$arr_dir" == /* ]] || die "ARR_STACK_DIR must be an absolute path"
+    dest="${arr_dir}/arrstack-$(date -u +%Y%m%d-%H%M%S).log"
+  fi
+
+  DEST_LOG="$dest"
+  mkdir -p "$(dirname "$DEST_LOG")"
+  export LOG_FILE
+}
+
 ts() {
   local now diff
   now=$(date +%s)
@@ -167,6 +241,11 @@ parse_args() {
         ;;
       --wireguard)
         VPN_TYPE="wireguard"
+        ;;
+      --debug)
+        DEBUG=1
+        KEEP_LOG=1
+        export DEBUG KEEP_LOG
         ;;
       -y|--yes)
         ASSUME_YES=1
@@ -1459,7 +1538,6 @@ install_aliases() {
 
 # --------------------------------[ MAIN ]--------------------------------------
 main() {
-  parse_args "$@"
   SCRIPT_START=$(date +%s)
   step "0/15 ARR+VPN merged installer"
   preflight
@@ -1492,17 +1570,53 @@ main() {
   note "  • qB Web UI: http://${LOCALHOST_NAME}:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
 }
 
+cleanup() {
+  local status=$?
+  exec 1>&3 2>&4
+
+  if [[ "${DEBUG}" == "1" && -n "${TMP_LOG:-}" ]]; then
+    if [[ -s "${TMP_LOG}" && -n "${DEST_LOG:-}" ]]; then
+      local dest_dir move_ok=0
+      dest_dir="$(dirname "${DEST_LOG}")"
+      if [[ -n "${dest_dir}" ]]; then
+        mkdir -p "${dest_dir}" 2>/dev/null || true
+      fi
+      if mv -f "${TMP_LOG}" "${DEST_LOG}" 2>/dev/null; then
+        move_ok=1
+      elif cp "${TMP_LOG}" "${DEST_LOG}" 2>/dev/null; then
+        rm -f "${TMP_LOG}" 2>/dev/null || true
+        move_ok=1
+      fi
+
+      if (( move_ok )); then
+        chmod 600 "${DEST_LOG}" 2>/dev/null || true
+        if [[ -n "${ARR_STACK_DIR:-}" ]]; then
+          local pointer base_name
+          pointer="${ARR_STACK_DIR%/}/arrstack-install.log"
+          base_name="$(basename "${DEST_LOG}")"
+          if [[ -n "${base_name}" && "${pointer}" != "${DEST_LOG}" ]]; then
+            ln -sfn "${base_name}" "${pointer}" 2>/dev/null || true
+          fi
+        fi
+        printf 'Installer log saved to %s\n' "${DEST_LOG}" >&3
+      else
+        printf 'Failed to save installer log to %s (temporary log at %s)\n' "${DEST_LOG}" "${TMP_LOG}" >&3
+      fi
+    else
+      if [[ -f "${TMP_LOG}" ]]; then
+        rm -f "${TMP_LOG}" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  exit "${status}"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  LOG_FILE="${ARR_STACK_DIR}/arrstack-install.log"
-  mkdir -p "${ARR_STACK_DIR}"
+  parse_args "$@"
   exec 3>&1 4>&2
+  setup_logging
   exec 1>>"${LOG_FILE}" 2>&1
-  cleanup() {
-    local status=$?
-    exec 1>&3 2>&4
-    echo "Log saved to ${LOG_FILE}" >&3
-    exit "$status"
-  }
   trap cleanup EXIT
 
   main "$@"
