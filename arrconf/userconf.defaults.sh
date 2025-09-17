@@ -24,6 +24,7 @@ LOCALHOST_NAME="${LOCALHOST_NAME:-localhost}"
 GLUETUN_CONTROL_PORT="${GLUETUN_CONTROL_PORT:-8000}"
 GLUETUN_CONTROL_HOST="${GLUETUN_CONTROL_HOST:-${LOCALHOST_ADDR}}"
 GLUETUN_HEALTH_TARGET="${GLUETUN_HEALTH_TARGET:-1.1.1.1:443}"
+UPDATER_PERIOD="${UPDATER_PERIOD:-24h}"
 
 # Media and download paths
 MEDIA_DIR="${MEDIA_DIR:-/media/arrs}"
@@ -35,7 +36,7 @@ SUBS_DIR="${SUBS_DIR:-${MEDIA_DIR}/subs}"
 
 # qBittorrent Web UI credentials and paths
 QBT_WEBUI_PORT="${QBT_WEBUI_PORT:-8080}"
-QBT_HTTP_PORT_HOST="${QBT_HTTP_PORT_HOST:-8080}"
+QBT_HTTP_PORT_HOST="${QBT_HTTP_PORT_HOST:-8081}"
 QBT_USER="${QBT_USER:-}"
 QBT_PASS="${QBT_PASS:-}"
 QBT_SAVE_PATH="${QBT_SAVE_PATH:-/completed/}"
@@ -56,10 +57,8 @@ TIMEZONE="${TIMEZONE:-Australia/Sydney}"
 
 # ProtonVPN defaults and selection
 PROTON_AUTH_FILE="${PROTON_AUTH_FILE:-${ARRCONF_DIR}/proton.auth}"
-DEFAULT_VPN_MODE="${DEFAULT_VPN_MODE:-openvpn}"
-SERVER_COUNTRIES="${SERVER_COUNTRIES:-Switzerland,Iceland,Sweden,Netherlands}"
-# list Priority CC in order of preference (currently listed by latency from AU)
-SERVER_CC_PRIORITY="${SERVER_CC_PRIORITY:-Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg}"
+DEFAULT_VPN_TYPE="${DEFAULT_VPN_TYPE:-openvpn}"
+SERVER_COUNTRIES="${SERVER_COUNTRIES:-Netherlands}"
 DEFAULT_COUNTRY="${DEFAULT_COUNTRY:-Australia}"
 
 # Service/package lists used by uninstaller
@@ -71,4 +70,4 @@ ALL_PACKAGES="${ALL_PACKAGES:-sonarr radarr prowlarr bazarr jackett lidarr reada
 DRY_RUN="${DRY_RUN:-0}"
 DEBUG="${DEBUG:-0}"
 NO_COLOR="${NO_COLOR:-0}"
-VPN_MODE="${VPN_MODE:-${DEFAULT_VPN_MODE}}"
+VPN_TYPE="${VPN_TYPE:-${VPN_MODE:-${DEFAULT_VPN_TYPE}}}"
