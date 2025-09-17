@@ -20,12 +20,21 @@ PROTON_AUTH_FILE="${PROTON_AUTH_FILE:-$ARRCONF_DIR/proton.auth}"
 
 # LAN IP for service bindings
 LAN_IP="${LAN_IP:-192.168.1.50}"
+LOCALHOST_ADDR="${LOCALHOST_ADDR:-$(_arr_get LOCALHOST_ADDR)}"
+[[ -n "$LOCALHOST_ADDR" ]] || LOCALHOST_ADDR=127.0.0.1
 
 # ----------------[ Utilities ]-----------------
 _arr_exists() { docker ps -a --format '{{.Names}}' | grep -qx "$1"; }
 _arr_dc()     { ( cd "$ARR_STACK_DIR" && "${ARR_DC[@]}" "$@" ); }
 _arr_get()    { grep -E "^$1=" "$ARR_ENV_FILE" 2>/dev/null | sed 's/^[^=]*=//' | tr -d '"' ; }
-_arr_url()    { printf "http://%s:%s" "${1:-${LAN_IP}}" "${2:?port}"; }
+_arr_access_host() {
+  local host="${1:-${LAN_IP}}"
+  if [[ -z "$host" || "$host" = "0.0.0.0" ]]; then
+    host="$LOCALHOST_ADDR"
+  fi
+  printf '%s' "$host"
+}
+_arr_url()    { local host; host="$(_arr_access_host "$1")"; printf "http://%s:%s" "$host" "${2:?port}"; }
 _arr_now()    { date +%Y%m%d-%H%M%S; }
 _arr_info()   { printf "[arr] %s\n" "$*"; }
 _arr_warn()   { printf "[arr:warn] %s\n" "$*" >&2; }
@@ -36,8 +45,10 @@ QBT_HTTP_PORT_HOST="$(_arr_get QBT_HTTP_PORT_HOST)"; [[ -n "$QBT_HTTP_PORT_HOST"
 GLUETUN_API_KEY="$(_arr_get GLUETUN_API_KEY)"
 QBT_USER="$(_arr_get QBT_USER)"
 QBT_PASS="$(_arr_get QBT_PASS)"
-VPN_MODE="$(_arr_get VPN_MODE)"
-QBT_HOST="${QBT_HOST:-$LAN_IP}"
+VPN_TYPE="$(_arr_get VPN_TYPE)"
+[[ -n "$VPN_TYPE" ]] || VPN_TYPE="$(_arr_get VPN_MODE)"
+VPN_MODE="$VPN_TYPE"
+QBT_HOST="${QBT_HOST:-$(_arr_access_host "$LAN_IP")}" 
 SONARR_PORT="$(_arr_get SONARR_PORT)"; [[ -n "$SONARR_PORT" ]] || SONARR_PORT=8989
 RADARR_PORT="$(_arr_get RADARR_PORT)"; [[ -n "$RADARR_PORT" ]] || RADARR_PORT=7878
 PROWLARR_PORT="$(_arr_get PROWLARR_PORT)"; [[ -n "$PROWLARR_PORT" ]] || PROWLARR_PORT=9696
@@ -46,6 +57,9 @@ FLARESOLVERR_PORT="$(_arr_get FLARESOLVERR_PORT)"; [[ -n "$FLARESOLVERR_PORT" ]]
 SERVER_COUNTRIES="$(_arr_get SERVER_COUNTRIES)"
 export SERVER_COUNTRIES
 SERVER_CC_PRIORITY="$(_arr_get SERVER_CC_PRIORITY)"
+if [[ -z "$SERVER_CC_PRIORITY" ]]; then
+  SERVER_CC_PRIORITY="Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg"
+fi
 
 # Known services in this project (compose names)
 ARR_SERVICES=(gluetun qbittorrent pf-sync sonarr radarr prowlarr bazarr flaresolverr)
@@ -77,7 +91,7 @@ arr.open()     {
   # Best-effort open in default browser (Linux desktop); otherwise just echo URLs
   local open_cmd
   if command -v xdg-open >/dev/null; then open_cmd="xdg-open"; else open_cmd=""; fi
-  local host="$LAN_IP"
+  local host="$(_arr_access_host "$LAN_IP")"
   local qport="$QBT_HTTP_PORT_HOST"
     local urls=(
       "qBittorrent=$(_arr_url "$host" "$qport")"
@@ -101,17 +115,52 @@ pvpn() {
   local cmd="${1:-}"; shift || true
   local stack_dir="$ARR_STACK_DIR"; local env_file="$ARR_ENV_FILE"
   local creds_file="$PROTON_AUTH_FILE"
-  _set(){ local k="$1" v="$2"; sed -i "/^${k}=/d" "$env_file" 2>/dev/null; [[ -n "$v" ]] && echo "${k}=${v}" >>"$env_file"; case "$k" in VPN_MODE) VPN_MODE="$v";; GLUETUN_API_KEY) GLUETUN_API_KEY="$v";; GLUETUN_CONTROL_PORT) GLUETUN_CONTROL_PORT="$v";; QBT_HTTP_PORT_HOST) QBT_HTTP_PORT_HOST="$v";; QBT_USER) QBT_USER="$v";; QBT_PASS) QBT_PASS="$v";; esac }
+  _set(){
+    local key="$1" v="$2"
+    if [[ "$key" = "VPN_MODE" ]]; then
+      key="VPN_TYPE"
+    fi
+    if [[ "$key" = "VPN_TYPE" ]]; then
+      sed -i '/^VPN_MODE=/d' "$env_file" 2>/dev/null || true
+    fi
+    sed -i "/^${key}=/d" "$env_file" 2>/dev/null || true
+    if [[ -n "$v" ]]; then
+      echo "${key}=${v}" >>"$env_file"
+    fi
+    case "$key" in
+      VPN_TYPE)
+        VPN_TYPE="$v"
+        VPN_MODE="$v"
+        ;;
+      GLUETUN_API_KEY)
+        GLUETUN_API_KEY="$v"
+        ;;
+      GLUETUN_CONTROL_PORT)
+        GLUETUN_CONTROL_PORT="$v"
+        ;;
+      QBT_HTTP_PORT_HOST)
+        QBT_HTTP_PORT_HOST="$v"
+        ;;
+      QBT_USER)
+        QBT_USER="$v"
+        ;;
+      QBT_PASS)
+        QBT_PASS="$v"
+        ;;
+    esac
+  }
   _restart(){ ( cd "$stack_dir" && docker compose --env-file "$env_file" restart gluetun ); }
   local auth="-u gluetun:${GLUETUN_API_KEY}"
+  local ctl_host
+  ctl_host="$(_arr_access_host "$LAN_IP")"
 
   case "$cmd" in
     c|connect)   ( cd "$stack_dir" && docker compose --env-file "$env_file" up -d gluetun qbittorrent );;
     r|reconnect) _restart;;
     mode)
       case "${1:-}" in
-        openvpn|ovpn) _set VPN_MODE openvpn; _restart;;
-        wireguard|wg) _arr_warn "PF is less reliable on WG with Proton"; _set VPN_MODE wireguard; _restart;;
+        openvpn|ovpn) _set VPN_TYPE openvpn; _restart;;
+        wireguard|wg) _arr_warn "PF is less reliable on WG with Proton"; _set VPN_TYPE wireguard; _restart;;
         *) echo "Usage: pvpn mode [openvpn|wireguard]"; return 1;;
       esac;;
     creds)
@@ -129,17 +178,17 @@ pvpn() {
     s|status)
       echo "-- Gluetun --"
       docker ps --filter name=gluetun --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | tail -n +2
-      echo "-- Public IP --";  curl -fsS "$auth" "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" || echo N/A
-      if [ "$VPN_MODE" = "openvpn" ]; then
-        echo "-- Forwarded port (OVPN) --"; curl -fsS "$auth" "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" || echo N/A
+      echo "-- Public IP --";  curl -fsS "$auth" "http://${ctl_host}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" || echo N/A
+      if [ "$VPN_TYPE" = "openvpn" ]; then
+        echo "-- Forwarded port (OVPN) --"; curl -fsS "$auth" "http://${ctl_host}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" || echo N/A
       else
-        echo "-- Forwarded port (WG) --";   curl -fsS "$auth" "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/wireguard/portforwarded" || echo N/A
+        echo "-- Forwarded port (WG) --";   curl -fsS "$auth" "http://${ctl_host}:${GLUETUN_CONTROL_PORT}/v1/wireguard/portforwarded" || echo N/A
       fi;;
     port)
-      if [ "$VPN_MODE" = "openvpn" ]; then
-        curl -fsS "$auth" "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded"
+      if [ "$VPN_TYPE" = "openvpn" ]; then
+        curl -fsS "$auth" "http://${ctl_host}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded"
       else
-        curl -fsS "$auth" "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/wireguard/portforwarded"
+        curl -fsS "$auth" "http://${ctl_host}:${GLUETUN_CONTROL_PORT}/v1/wireguard/portforwarded"
       fi;;
     paths|path|where)
       echo "Proton auth: $creds_file"
@@ -161,26 +210,30 @@ USAGE
 
 glue.logs()   { arr.logs gluetun; }
 glue.restart(){ docker restart gluetun; }
-glue.ip()     { curl -fsS -u "gluetun:${GLUETUN_API_KEY}" "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip"; echo; }
+glue.ip()     { curl -fsS -u "gluetun:${GLUETUN_API_KEY}" "http://$(_arr_access_host "$LAN_IP"):${GLUETUN_CONTROL_PORT}/v1/publicip/ip"; echo; }
 glue.pf()     { pvpn port; echo; }
 glue.health() { docker inspect --format '{{.State.Health.Status}}' gluetun 2>/dev/null || echo n/a; }
 
 arr_vpn_servers() {
+  local host
+  host="$(_arr_access_host "$LAN_IP")"
   curl -fsS -u "gluetun:${GLUETUN_API_KEY}" \
-    "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/servers" |
+    "http://${host}:${GLUETUN_CONTROL_PORT}/v1/servers" |
     jq -r '.protonvpn[].country' | sort -u
 }
 
 _arr_vpn_switch() {
   local cc="$1"
+  local host
+  host="$(_arr_access_host "$LAN_IP")"
   if wget -qO- --method=PUT \
       --header="Content-Type: application/json" \
       --user="gluetun:${GLUETUN_API_KEY}" \
-      "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/settings" \
+      "http://${host}:${GLUETUN_CONTROL_PORT}/v1/settings" \
       --post-data "{\"server_countries\":[\"${cc}\"]}" >/dev/null 2>&1; then
     echo "Requested Gluetun switch to: ${cc}"
     wget -qO- --method=PUT --user="gluetun:${GLUETUN_API_KEY}" \
-      "http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/restart" >/dev/null 2>&1 || true
+      "http://${host}:${GLUETUN_CONTROL_PORT}/v1/openvpn/restart" >/dev/null 2>&1 || true
     return 0
   fi
   echo "Control API settings PUT not available; restarting with ${cc}…"

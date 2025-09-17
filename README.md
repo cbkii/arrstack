@@ -61,7 +61,7 @@ Gluetun exposes an HTTP control server for status, PF and metadata on **`${GLUET
 - Limits routes to the minimal surface this stack needs:
   - `GET /v1/publicip/ip` → public IP
   - `GET /v1/openvpn/status` → `{"status":"running"}`
-  - `GET /v1/openvpn/portforwarded` → integer PF port
+  - `GET /v1/openvpn/portforwarded` → `IP:port` string (PF assignment)
 - Stores the password in `.env` (`GLUETUN_API_KEY`) and injects Basic auth where required.
 - Warns strongly against exposing the control server publicly without TLS and hardened auth. Gluetun tightened control-server auth around v3.39–v3.40; stay on ≥v3.39.1 if you change the pin.
 
@@ -107,7 +107,7 @@ sudo systemctl enable --now docker
 2. **Review and customise configuration:**
 
    * Defaults live in `arrconf/userconf.defaults.sh`. Copy it to `arrconf/userconf.sh` and edit the values you want to override; the overrides file is sourced on every run so you can adjust it before the first install or later and rerun the script.
-   * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_MODE`, `SERVER_CC_PRIORITY`).
+  * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_TYPE`). Legacy `VPN_MODE` entries are migrated to `VPN_TYPE` automatically when you rerun the installer.
      * Set `QBT_PASS` in **plain text** – the installer hashes it with PBKDF2 (via OpenSSL 3, `xxd`, and `base64`) before writing `qBittorrent.conf`. If the hashing deps are missing, the script warns and ignores these values.
 
    ```bash
@@ -149,7 +149,9 @@ sudo systemctl enable --now docker
    >
    > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
    >
-   > Tip: After you log in, change the generated password. UPnP/NAT-PMP is disabled automatically.
+> Tip: After you log in, change the generated password. UPnP/NAT-PMP is disabled automatically.
+>
+> If the installer can't find `LAN_IP` on the host, it warns and binds everything to `0.0.0.0`. Pair that fallback with host firewall rules before exposing services beyond your LAN.
 
 ### Config files
 
@@ -184,23 +186,23 @@ git commit -m "Ignore userconf.sh; load defaults then overrides"
 
 ## Key environment variables (single source of truth)
 
-| Variable                      | What it controls                                  | Typical value / notes                                         |
-|-------------------------------|----------------------------------------------------|----------------------------------------------------------------|
-| `LAN_IP`                      | Bind for all exported ports                        | e.g. `192.168.1.11` (LAN only)                                 |
-| `GLUETUN_CONTROL_HOST`        | Control server host **inside** the namespace       | `127.0.0.1`                                                    |
-| `GLUETUN_CONTROL_PORT`        | Control server port                                | `8000`                                                         |
-| `GLUETUN_API_KEY`            | HTTP control server password                       | auto-generated; stored in `.env`                              |
-| `QBT_WEBUI_PORT`              | qB **internal** WebUI port                         | `8080`                                                         |
-| `QBT_HTTP_PORT_HOST`          | qB **host** port mapping                           | e.g. `8080` or another free port                              |
-| `PROTON_USER` / `PROTON_PASS` | Proton OpenVPN credentials (plain user; script adds `+pmp`) | required for PF                                         |
-| `SERVER_COUNTRIES`            | Allowed countries (OpenVPN)                        | keep short list; balances latency and privacy                  |
-| `SERVER_CC_PRIORITY`          | Preferred countries for `arr_vpn_fastest`          | reorder to suit your geography                                 |
-| `DEFAULT_VPN_MODE`            | Starting VPN mode (`ovpn` or `wg`)                 | `ovpn` for PF                                                  |
-| `UPDATER_PERIOD`              | Gluetun server list updater                        | `0` (off) or `24h`                                             |
-| `DOT`                         | DNS-over-TLS in Gluetun                            | `off` by default (compatibility)                               |
-| `TIMEZONE`                    | TZ applied to containers                           | e.g. `Australia/Sydney`                                        |
-| `QBT_USER` / `QBT_PASS`       | Optional preseeded qB credentials                  | requires OpenSSL 3 + `xxd` + `base64`                          |
-
+| Variable                | What it controls                             | Typical value / notes                                   |
+|-------------------------|----------------------------------------------|---------------------------------------------------------|
+| `LAN_IP`                | Bind for all exported ports                  | e.g. `192.168.1.11` (LAN only). Installer falls back to `0.0.0.0` if the host lacks this IP.        |
+| `GLUETUN_CONTROL_HOST`  | Control server host **inside** the namespace | `127.0.0.1`                                             |
+| `GLUETUN_CONTROL_PORT`  | Control server port                          | `8000`                                                  |
+| `GLUETUN_HEALTH_TARGET` | Health-check target for Gluetun              | `1.1.1.1:443` (adjust if your ISP blocks it)            |
+| `GLUETUN_API_KEY`       | HTTP control server password                 | auto-generated; stored in `.env`                        |
+| `QBT_WEBUI_PORT`        | qB **internal** WebUI port                   | `8080`                                                  |
+| `QBT_HTTP_PORT_HOST`    | qB **host** port mapping                     | e.g. `8081` or another free port                        |
+| `PROTON_USER` / `PROTON_PASS` | Proton OpenVPN credentials (plain user; script adds `+pmp`) | required for PF                                      |
+| `SERVER_COUNTRIES`      | Allowed countries (OpenVPN)                  | start with `Netherlands` (known PF region)             |
+| `SERVER_CC_PRIORITY`    | Optional priority list for CLI helpers       | set in `userconf.sh`; CLI falls back to a built-in list if unset |
+| `DEFAULT_VPN_TYPE`      | Starting VPN mode (`openvpn` or `wireguard`) | `openvpn` for PF. Legacy `VPN_MODE` values are mapped automatically. |
+| `UPDATER_PERIOD`        | Gluetun server list updater                  | `24h` (`0` disables updates)                            |
+| `DOT`                   | DNS-over-TLS in Gluetun                      | `off` by default (compatibility)                        |
+| `TIMEZONE`              | TZ applied to containers                     | e.g. `Australia/Sydney`                                 |
+| `QBT_USER` / `QBT_PASS` | Optional preseeded qB credentials            | requires OpenSSL 3 + `xxd` + `base64`                   |
 ---
 
 ## Ports & paths
@@ -229,16 +231,27 @@ git commit -m "Ignore userconf.sh; load defaults then overrides"
 ## Startup order & health-gates
 
 ```mermaid
-flowchart LR
-  A[Gluetun\nOpenVPN + PF healthy] --> B[qBittorrent healthy]
-  B --> C[Prowlarr healthy]
-  B --> D[Sonarr healthy]
-  B --> E[Radarr healthy]
-  D & E --> F[Bazarr healthy]
-  C --- G[FlareSolverr healthy]
+flowchart TD
+  A[Gluetun container started] --> B[Arr apps (Sonarr/Radarr/\nProwlarr/Bazarr/FlareSolverr)]
+  A --> C{Gluetun healthy \n+ PF assigned}
+  C --> D[qBittorrent healthy]
+  C --> E[pf-sync applying PF]
 ```
 
-Each service declares a Docker healthcheck and dependants rely on `depends_on: condition: service_healthy`. This avoids race conditions: Gluetun must be running **and** have a forwarded port before qBittorrent starts, which in turn gates the rest of the stack. See [Docker's healthcheck documentation](https://docs.docker.com/compose/how-tos/advanced-deployments/dependent-services/#ensure-that-a-service-depends-on-another) for the pattern.
+Services are split across two Compose profiles:
+
+* **`bootstrap`** — Gluetun plus the Arr/indexer apps. They depend on `condition: service_started`, so they can initialise while Gluetun negotiates Proton PF.
+* **`prod`** — Adds qBittorrent and, when `VPN_TYPE=openvpn`, the pf-sync sidecar. These still require Gluetun to report healthy **and** return a PF port.
+
+The installer runs `bootstrap` first, waits up to ~600 s for Gluetun to report healthy with a port, then promotes the `prod` profile. If you manage the stack manually, mirror that flow:
+
+```bash
+docker compose --profile bootstrap up -d
+# wait for Gluetun health + PF
+docker compose --profile prod up -d
+```
+
+All services keep their individual healthchecks; only qBittorrent (and pf-sync when OpenVPN is in use) gate on Gluetun health.
 
 Service healthchecks stay on loopback HTTP endpoints that do **not** require API keys. Arr applications have historically moved or restricted `/ping`-style endpoints, so simple local HTTP/TCP checks remain stable across upstream updates.
 
@@ -283,18 +296,18 @@ pvpn paths        # show credential & config locations
 pvpn portsync     # force qB to use the currently forwarded port
 ```
 
-1. **Initial location is random within `SERVER_COUNTRIES`.** To control where you start, keep `SERVER_COUNTRIES` short (1–3) with **privacy-friendly countries**. We default to:
+1. **Initial location is random within `SERVER_COUNTRIES`.** Keep the list short (1–3) and start with countries that reliably support Proton port forwarding. We default to:
 
    ```
-   SERVER_COUNTRIES="Switzerland,Iceland,Sweden,Netherlands"
+   SERVER_COUNTRIES="Netherlands"
    ```
 
-   * Why these? Proton’s **Secure Core** runs in **Switzerland, Iceland, Sweden** (privacy-strong); **Netherlands** and **Romania** have had indiscriminate data retention laws **struck down**; **Luxembourg** has strong data-protection. Other privacy-friendly options: Romania, Luxembourg.
+   * Why Netherlands? Proton exposes the broadest set of PF-capable OpenVPN servers there. Once you confirm port forwarding works, expand the list (e.g. Switzerland, Iceland, Sweden) or pin specific endpoints with `SERVER_HOSTNAMES`.
 
 2. **Switching later** is easy via `.aliasarr`:
 
-   * `arr_vpn_country "<Country>"` — switch to a specific country; if it fails, the function retries through `SERVER_CC_PRIORITY`.
-   * `arr_vpn_fastest [N]` — probe the first *N* countries in `SERVER_CC_PRIORITY` (default 6), pick the lowest RTT from AU, and switch there.
+  * `arr_vpn_country "<Country>"` — switch to a specific country; if it fails, the function retries through `SERVER_CC_PRIORITY` (falls back to a built-in list if unset).
+  * `arr_vpn_fastest [N]` — probe the first *N* countries in `SERVER_CC_PRIORITY` (default 6; built-in list used if unset), pick the lowest RTT from AU, and switch there.
    * `arr_vpn_servers` — list Proton countries from the current server list.
 
 3. **Priority list used for switching/speed trials from Australia** (fast → slow):
@@ -321,7 +334,7 @@ See the [qBittorrent Web API documentation](https://github.com/qbittorrent/qBitt
 ### Proton port forwarding behaviour
 
 - Proton PF is only available on **OpenVPN** and requires the username suffix `+pmp`. The installer ensures the suffix is present when writing `.env`.
-- The stack treats PF as a readiness gate. Gluetun must report a port via `/v1/openvpn/portforwarded` before qBittorrent starts.
+- The stack treats PF as a readiness gate. Gluetun must return an `IP:port` string from `/v1/openvpn/portforwarded` before qBittorrent starts.
 - A sidecar polls the control API every 45 seconds and applies the current PF port through qBittorrent’s API.
 - The forwarded port is session-based; expect it to change whenever Gluetun reconnects.
 
@@ -330,7 +343,7 @@ See the [qBittorrent Web API documentation](https://github.com/qbittorrent/qBitt
 ## ProtonVPN + Gluetun notes (2024/2025)
 
 - Use Proton’s OpenVPN credentials with the `+pmp` suffix for port forwarding. These differ from your standard Proton login.
-- The stack pins Gluetun to `v3.38.0`. Gluetun `v3.39+` filters Proton servers too aggressively and often reports “no servers available”. We also set `UPDATER_PERIOD=0` to prevent server list updates. If issues persist, specify exact `SERVER_HOSTNAMES` like `node-xx-xx.protonvpn.net`.
+- The stack pins Gluetun to `v3.38.0`. Gluetun `v3.39+` filters Proton servers too aggressively and often reports “no servers available”. We leave `UPDATER_PERIOD=24h` so Gluetun refreshes Proton’s server metadata once a day; set it to `0` if you need to freeze a known-good list. If issues persist, specify exact `SERVER_HOSTNAMES` like `node-xx-xx.protonvpn.net`.
 - Port forwarding only works on Proton’s P2P servers and a new port is assigned each session. qBittorrent’s listening port is synced automatically by a sidecar that polls Gluetun’s API.
 - Recommended health check tuning: `HEALTH_VPN_DURATION_INITIAL=30s` and `HEALTH_SUCCESS_WAIT_DURATION=10s` with `HEALTH_TARGET_ADDRESS=1.1.1.1:443`.
 
