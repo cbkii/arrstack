@@ -155,7 +155,11 @@ export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEM
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_TYPE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
 
+# non-interactive mode & key-rotation control
+: "${ARR_NONINTERACTIVE:=0}"
+: "${FORCE_ROTATE_API_KEY:=0}"
 LAN_IP_ALL_INTERFACES=0
+
 # ----------------------------[ LOGGING ]---------------------------------------
 log_dest_is_allowed() {
   local candidate="$1"
@@ -249,7 +253,16 @@ parse_args() {
         ;;
       -y|--yes)
         ASSUME_YES=1
+        ARR_NONINTERACTIVE=1
         export ASSUME_YES
+        ;;
+      --no-prompt|--non-interactive)
+        ARR_NONINTERACTIVE=1
+        ASSUME_YES=1
+        export ASSUME_YES
+        ;;
+      --rotate-apikey|--rotate-api-key|--rotate-key)
+        FORCE_ROTATE_API_KEY=1
         ;;
     esac
     shift
@@ -287,6 +300,68 @@ atomic_write() {
   local content="$2"
   ensure_dir "$(dirname "$f")"
   if is_dry; then note "[DRY] write -> $f"; else printf "%s" "$content" >"$f"; fi
+}
+
+# ----------[ API KEY PREFLIGHT ]----------
+mask_key() {
+  local k="${1:-}" n
+  n=${#k}
+  if (( n <= 8 )); then
+    printf '%s' '********'
+  else
+    printf '%s…%s' "${k:0:4}" "${k: -4}"
+  fi
+}
+
+read_tty() {
+  local prompt="$1" var="$2" ans=""
+  if [ -t 0 ] && [ -r /dev/tty ]; then
+    printf "%s" "$prompt" >/dev/tty
+    if ! IFS= read -r ans </dev/tty; then
+      ans=""
+    fi
+  else
+    printf "%s" "$prompt" >&3
+    if ! IFS= read -r ans; then
+      ans=""
+    fi
+  fi
+  printf -v "$var" '%s' "$ans"
+}
+
+preflight_gluetun_apikey() {
+  local toml="${ARR_DOCKER_DIR}/gluetun/auth/config.toml"
+  local key_env="" key_toml="" chosen="" ans=""
+  if [ -f "${ARR_ENV_FILE}" ]; then
+    key_env="$(grep -E '^GLUETUN_API_KEY=' "${ARR_ENV_FILE}" | tail -n1 | cut -d= -f2- | tr -d '"\r' || true)"
+  fi
+  if [ -f "${toml}" ]; then
+    key_toml="$(sed -nE 's/^[[:space:]]*password="([^"]+)".*/\1/p' "${toml}" | tail -n1 || true)"
+  fi
+  if [ -n "${key_toml}" ] && [ -n "${key_env}" ] && [ "${key_toml}" != "${key_env}" ]; then
+    warn "GLUETUN_API_KEY mismatch between .env and auth/config.toml; will prefer the TOML value."
+  fi
+  chosen="${key_toml:-$key_env}"
+
+  if [ "${FORCE_ROTATE_API_KEY}" = "1" ]; then
+    GLUETUN_API_KEY=""
+    return
+  fi
+  if [ -z "${chosen}" ]; then
+    note "No existing GLUETUN_API_KEY found; will generate a new one."
+    return
+  fi
+  if [ "${ARR_NONINTERACTIVE}" = "1" ]; then
+    GLUETUN_API_KEY="${chosen}"
+    return
+  fi
+  read_tty "Reuse existing GLUETUN_API_KEY ($(mask_key "${chosen}"))? [Y/n] " ans
+  if [[ "${ans}" =~ ^[Nn]$ ]]; then
+    GLUETUN_API_KEY=""
+    FORCE_ROTATE_API_KEY=1
+  else
+    GLUETUN_API_KEY="${chosen}"
+  fi
 }
 
 have_ip() {
@@ -722,10 +797,10 @@ parse_wg_conf() {
 # ------------------------------[ GLUETUN AUTH ]--------------------------------
 make_gluetun_apikey() {
   step "9/15 Generating Gluetun API key"
-  if [[ -f "${ARR_ENV_FILE}" ]]; then
+  if [ -z "${GLUETUN_API_KEY:-}" ] && [[ -f "${ARR_ENV_FILE}" ]]; then
     GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_ENV_FILE}" | cut -d= -f2- || true)"
   fi
-  if [[ -z "${GLUETUN_API_KEY}" ]]; then
+  if [[ -z "${GLUETUN_API_KEY:-}" ]] || [[ "${FORCE_ROTATE_API_KEY:-0}" = "1" ]]; then
     if run docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey; then
       GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
     else
@@ -1554,6 +1629,7 @@ main() {
   purge_native_packages
   final_docker_cleanup
   ensure_proton_auth
+  preflight_gluetun_apikey
   make_gluetun_apikey
   write_gluetun_auth
   write_env
