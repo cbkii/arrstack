@@ -132,6 +132,17 @@ sudo systemctl enable --now docker
    * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **warns if `./arrconf/proton.auth` is missing**.
    * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script adds `+pmp` automatically for OpenVPN port forwarding.
 
+   ### Installer logging
+
+   - By default, the installer does not persist logs.
+   - Use `--debug` or `DEBUG=1` to keep logs under `${ARR_STACK_DIR}` (files are written with mode `0600`).
+   - Examples:
+
+     ```bash
+     ./arrstack.sh --debug
+     DEBUG=1 LOG_FILE_DEST="$ARR_STACK_DIR/arrstack-run.log" ./arrstack.sh
+     ```
+
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.11`):
 
    * **qBittorrent:** `http://${LAN_IP}:${QBT_HTTP_PORT_HOST}`
