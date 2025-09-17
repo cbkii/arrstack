@@ -165,14 +165,19 @@ The preflight always prefers the password stored in `gluetun/auth/config.toml` w
 Subcommands still work as before — for example `./arrstack.sh conf-diff` compares `userconf.sh` to the latest defaults and exits.
 
 # Query public IP via Gluetun control API
+```bash
 auth="--user gluetun:${GLUETUN_API_KEY}"  # omit if API key empty (WireGuard without RBAC is not allowed)
 curl -fsS ${auth} http://${LOCALHOST_ADDR:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip
+```
 
 # Proton OpenVPN only
+```bash
 curl -fsS ${auth} http://${LOCALHOST_ADDR:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status
 curl -fsS ${auth} http://${LOCALHOST_ADDR:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded
+```
 
 # Confirm qBittorrent is using the forwarded port
+```bash
 curl -fsS http://${LOCALHOST_ADDR:-127.0.0.1}:${QBT_HTTP_PORT_HOST}/api/v2/app/preferences | jq '.listen_port'
 ```
 
