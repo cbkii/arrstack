@@ -357,6 +357,7 @@ preflight_gluetun_apikey() {
   fi
   read_tty "Reuse existing GLUETUN_API_KEY ($(mask_key "${chosen}"))? [Y/n] " ans
   if [[ "${ans}" =~ ^[Nn]$ ]]; then
+    note "Will generate a new GLUETUN_API_KEY for Gluetun control."
     GLUETUN_API_KEY=""
     FORCE_ROTATE_API_KEY=1
   else
@@ -458,9 +459,14 @@ preflight() {
     esac
   done
 
+  local ctrl_port ctrl_host_bind ctrl_client_host
+  ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+  ctrl_host_bind="${LAN_IP:-0.0.0.0}"
+  ctrl_client_host="$(lan_access_host)"
+
   note "Summary:"
   note "  • VPN_TYPE=${VPN_TYPE}"
-  note "  • LAN_IP=${LAN_IP}   Control: ${GLUETUN_CONTROL_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT:-8000}"
+  note "  • Control API: container bind 0.0.0.0:${ctrl_port}; host ${ctrl_host_bind}:${ctrl_port}; client URL http://${ctrl_client_host}:${ctrl_port}"
   note "  • WebUI host port (qB): ${QBT_HTTP_PORT_HOST}  internal: ${QBT_WEBUI_PORT}"
   confirm_or_die
 }
@@ -797,20 +803,46 @@ parse_wg_conf() {
 # ------------------------------[ GLUETUN AUTH ]--------------------------------
 make_gluetun_apikey() {
   step "9/15 Generating Gluetun API key"
-  if [ -z "${GLUETUN_API_KEY:-}" ] && [[ -f "${ARR_ENV_FILE}" ]]; then
-    GLUETUN_API_KEY="$(grep -E '^GLUETUN_API_KEY=' "${ARR_ENV_FILE}" | cut -d= -f2- || true)"
+  local previous="${GLUETUN_API_KEY:-}"
+  local need_new=0
+
+  if [[ -z "${previous}" ]] && [[ -f "${ARR_ENV_FILE}" ]]; then
+    previous="$(grep -E '^GLUETUN_API_KEY=' "${ARR_ENV_FILE}" | tail -n1 | cut -d= -f2- | tr -d '"\r\n' || true)"
   fi
-  if [[ -z "${GLUETUN_API_KEY:-}" ]] || [[ "${FORCE_ROTATE_API_KEY:-0}" = "1" ]]; then
-    if run docker run --rm ghcr.io/qdm12/gluetun genkey >/tmp/gl_apikey; then
-      GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
+
+  if [[ "${FORCE_ROTATE_API_KEY:-0}" = "1" ]]; then
+    need_new=1
+  elif [[ -z "${previous}" ]]; then
+    need_new=1
+  fi
+
+  if (( need_new )); then
+    local tmp=/tmp/gl_apikey.$$
+    if run docker run --rm ghcr.io/qdm12/gluetun genkey >"${tmp}"; then
+      :
     else
-      run openssl rand -base64 48 >/tmp/gl_apikey
-      GLUETUN_API_KEY="$(cat /tmp/gl_apikey)"
+      warn "docker-based API key generation failed; falling back to openssl."
+      run openssl rand -base64 48 >"${tmp}" || die "Failed to generate Gluetun API key with openssl."
     fi
-    rm -f /tmp/gl_apikey
-    ok "API key generated"
+    GLUETUN_API_KEY="$(tr -d '\r\n' <"${tmp}")"
+    rm -f "${tmp}"
+    if [[ -z "${GLUETUN_API_KEY}" ]]; then
+      die "Generated Gluetun API key is empty."
+    fi
+    if [[ -n "${previous}" && "${GLUETUN_API_KEY}" = "${previous}" ]]; then
+      warn "Generated API key matched existing value; regenerating locally."
+      tmp=/tmp/gl_apikey.$$-regen
+      run openssl rand -base64 48 >"${tmp}" || die "Failed to regenerate Gluetun API key with openssl."
+      GLUETUN_API_KEY="$(tr -d '\r\n' <"${tmp}")"
+      rm -f "${tmp}"
+      [[ -n "${GLUETUN_API_KEY}" ]] || die "Regenerated Gluetun API key is empty."
+    fi
+    export GLUETUN_API_KEY
+    ok "Generated new API key (length ${#GLUETUN_API_KEY})"
   else
-    ok "Reusing existing API key"
+    GLUETUN_API_KEY="$(printf '%s' "${previous}" | tr -d '\r\n')"
+    export GLUETUN_API_KEY
+    ok "Reusing existing API key (length ${#GLUETUN_API_KEY})"
   fi
 }
 write_gluetun_auth() {
@@ -947,7 +979,7 @@ verify_gluetun_control_security() {
 
   local key_len=${#GLUETUN_API_KEY}
   if (( key_len < 24 )); then
-    warn "GLUETUN_API_KEY length (${key_len}) is shorter than recommended (>=24). Consider regenerating it."
+    warn "GLUETUN_API_KEY length (${key_len}) is shorter than recommended (>=24). Run ./arrstack.sh --rotate-apikey to regenerate."
   fi
   note "RBAC: enabled via ${auth_file} (API key length ${key_len})."
   note "Access from host: http://${access_host}:${ctrl_port}/v1/publicip/ip"
