@@ -12,19 +12,20 @@ It runs every service behind ProtonVPN with automatic port forwarding, applies s
 3. [Security model & control server](#security-model--control-server)
 4. [Prerequisites](#prerequisites)
 5. [Quick start](#quick-start)
-6. [Key environment variables (single source of truth)](#key-environment-variables-single-source-of-truth)
-7. [Ports & paths](#ports--paths)
-8. [Startup order & health-gates](#startup-order--health-gates)
-9. [Default folders & mapping](#default-folders--mapping)
-10. [Daily use](#daily-use)
-11. [qBittorrent API usage & Proton PF behaviour](#qbittorrent-api-usage--proton-pf-behaviour)
-12. [ProtonVPN + Gluetun notes (2024/2025)](#protonvpn--gluetun-notes-20242025)
-13. [Optional: WireGuard fallback](#optional-wireguard-fallback)
-14. [Troubleshooting](#troubleshooting)
-15. [Privacy defaults (DoT) & upgrades](#privacy-defaults-dot--upgrades)
-16. [Known limitations](#known-limitations)
-17. [Uninstall / restore](#uninstall--restore)
-18. [Notes](#notes)
+6. [Command-line flags & automation](#command-line-flags--automation)
+7. [Key environment variables (single source of truth)](#key-environment-variables-single-source-of-truth)
+8. [Ports & paths](#ports--paths)
+9. [Startup order & health-gates](#startup-order--health-gates)
+10. [Default folders & mapping](#default-folders--mapping)
+11. [Daily use](#daily-use)
+12. [qBittorrent API usage & Proton PF behaviour](#qbittorrent-api-usage--proton-pf-behaviour)
+13. [ProtonVPN + Gluetun notes (2024/2025)](#protonvpn--gluetun-notes-20242025)
+14. [Optional: WireGuard fallback](#optional-wireguard-fallback)
+15. [Troubleshooting](#troubleshooting)
+16. [Privacy defaults (DoT) & upgrades](#privacy-defaults-dot--upgrades)
+17. [Known limitations](#known-limitations)
+18. [Uninstall / restore](#uninstall--restore)
+19. [Notes](#notes)
 
 ---
 
@@ -131,6 +132,8 @@ sudo systemctl enable --now docker
 
    * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **warns if `./arrconf/proton.auth` is missing**.
    * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script adds `+pmp` automatically for OpenVPN port forwarding.
+   * When a Gluetun API key already exists, the installer prints a masked preview (first/last four characters) and asks if you want to reuse it. **Press Enter to reuse** (default) or answer `n` to rotate.
+   * If `.env` and `gluetun/auth/config.toml` ever disagree about the key, the preflight warns you and normalises everything to the TOML value — Gluetun only reads that file, so this protects running stacks.
 
 4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.11`):
 
@@ -181,6 +184,20 @@ printf "arrconf/userconf.sh\n" >> .gitignore
 git add .gitignore arrconf/userconf.defaults.sh
 git commit -m "Ignore userconf.sh; load defaults then overrides"
 ```
+
+## Command-line flags & automation
+
+You can steer the installer from the command line when you need to override defaults or run unattended:
+
+- `--openvpn` — force the next run to pin `VPN_TYPE=openvpn` before writing `.env` or Compose files.
+- `--wireguard` — switch to the WireGuard profile (no Proton port forwarding) for this run.
+- `-y`, `--yes` — accept prompts automatically and enable non-interactive mode. Equivalent to combining `--no-prompt` with `ASSUME_YES=1`.
+- `--no-prompt`, `--non-interactive` — disable interactive prompts (defaults to reusing any existing Gluetun API key). Pair with `--rotate-apikey` when automation needs a fresh key.
+- `--rotate-apikey`, `--rotate-api-key`, `--rotate-key` — regenerate `GLUETUN_API_KEY` on the next run, even if a key already exists.
+
+The preflight always prefers the password stored in `gluetun/auth/config.toml` when `.env` and the TOML disagree, prints a warning, and syncs both files to that value. Interactive runs then show a masked preview and let you reuse or rotate; non-interactive runs keep the existing key unless you explicitly pass a rotate flag.
+
+Subcommands still work as before — for example `./arrstack.sh conf-diff` compares `userconf.sh` to the latest defaults and exits.
 
 ---
 
