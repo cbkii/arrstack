@@ -1,487 +1,178 @@
 # arrstack
 
-**arrstack** bundles ProtonVPN, Gluetun, qBittorrent and the *arr suite into a tidy, beginner‑friendly stack.
-It runs every service behind ProtonVPN with automatic port forwarding, applies strict health gates, and ships helper aliases for daily use.
+### 1) Overview
+- Installs Gluetun (ProtonVPN provider), qBittorrent, Sonarr, Radarr, Prowlarr, Bazarr, and FlareSolverr with Proton port forwarding managed by a pf-sync sidecar in OpenVPN mode.
+- WireGuard is optional; the stack still launches through Gluetun but Proton port forwarding does not apply in that mode.
 
----
+### 2) Prerequisites
+- Debian/Ubuntu host with `sudo`; the installer installs any missing `docker.io`, `docker-compose-plugin`, `curl`, `iproute2`, `openssl`, and `xxd` packages and requires Docker Compose v2.
+- ProtonVPN Plus/Unlimited account:
+  - OpenVPN: populate `arrconf/proton.auth` with `PROTON_USER`/`PROTON_PASS` (username **without** `+pmp`).
+  - WireGuard: place `proton.conf` (or `wg*.conf`) in `${ARRCONF_DIR}`, `${ARR_DOCKER_DIR}/gluetun`, or `${LEGACY_VPNCONFS_DIR}`.
+- Filesystem: ensure directories referenced in `arrconf/userconf.defaults.sh` (or overrides in `arrconf/userconf.sh`) exist and are writable before running.
+- Ports: free the values mapped to `${GLUETUN_CONTROL_PORT}`, `${QBT_HTTP_PORT_HOST}`, `${SONARR_PORT}`, `${RADARR_PORT}`, `${PROWLARR_PORT}`, `${BAZARR_PORT}`, and `${FLARESOLVERR_PORT}`.
+- LAN binding: set `LAN_IP` to your LAN adapter for restricted exposure; `0.0.0.0` or public IPs widen the control API scope and trigger warnings.
 
-## Table of contents
-
-1. [What this stack does / What it doesn't](#what-this-stack-does--what-it-doesnt)
-2. [Features](#features)
-3. [Security model & control server](#security-model--control-server)
-4. [Prerequisites](#prerequisites)
-5. [Quick start](#quick-start)
-6. [Command-line flags & automation](#command-line-flags--automation)
-7. [Key environment variables (single source of truth)](#key-environment-variables-single-source-of-truth)
-8. [Ports & paths](#ports--paths)
-9. [Startup order & health-gates](#startup-order--health-gates)
-10. [Default folders & mapping](#default-folders--mapping)
-11. [Daily use](#daily-use)
-12. [qBittorrent API usage & Proton PF behaviour](#qbittorrent-api-usage--proton-pf-behaviour)
-13. [ProtonVPN + Gluetun notes (2024/2025)](#protonvpn--gluetun-notes-20242025)
-14. [Optional: WireGuard fallback](#optional-wireguard-fallback)
-15. [Troubleshooting](#troubleshooting)
-16. [Privacy defaults (DoT) & upgrades](#privacy-defaults-dot--upgrades)
-17. [Known limitations](#known-limitations)
-18. [Uninstall / restore](#uninstall--restore)
-19. [Notes](#notes)
-
----
-
-## What this stack does / What it doesn't
-
-### What this stack does
-- Runs qBittorrent, Sonarr, Radarr, Prowlarr, Bazarr and FlareSolverr **behind ProtonVPN via Gluetun**.
-- Uses **OpenVPN** by default because **Proton port forwarding (PF)** requires OpenVPN with the username suffix **`+pmp`**. The installer enforces this suffix automatically.
-- Treats **PF availability** as a hard readiness gate: dependants only start once Gluetun is healthy **and** a PF port is issued.
-
-### What this stack does not do
-- **WireGuard PF**: Proton does **not** support PF on WireGuard in Gluetun; WG is an optional non-PF fallback only.
-- Expose Gluetun’s control server to the internet. If you change `LAN_IP` to `0.0.0.0`, you **must** front it with TLS and strong authentication.
-
-[Learn more about Proton PF requirements.](https://protonvpn.com/support/port-forwarding/)
-
----
-
-## Features
-
-- **Gluetun** (ProtonVPN) pinned to v3.38.0 with sensible defaults (DoT off for compatibility, stable health target, PF on, server list updates disabled).
-- **qBittorrent** in Gluetun’s network namespace with automatic PF port sync.
-- **Sonarr, Radarr, Prowlarr, Bazarr, FlareSolverr** routed through Gluetun.
-- Service health checks with startup dependencies gated on Gluetun readiness.
-- A comprehensive **`.aliasarr`** helper with `pvpn` and stack aliases.
-
----
-
-## Security model & control server
-
-Gluetun exposes an HTTP control server for status, PF and metadata on **`${GLUETUN_CONTROL_PORT:-8000}`**. The stack:
-
-- Binds the control server to the LAN (`LAN_IP`) and enables RBAC/auth.
-- Limits routes to the minimal surface this stack needs:
-  - `GET /v1/publicip/ip` → public IP
-  - `GET /v1/openvpn/status` → `{"status":"running"}`
-  - `GET /v1/openvpn/portforwarded` → `IP:port` string (PF assignment)
-- Stores the password in `.env` (`GLUETUN_API_KEY`) and injects Basic auth where required.
-- Warns strongly against exposing the control server publicly without TLS and hardened auth. Gluetun tightened control-server auth around v3.39–v3.40; stay on ≥v3.39.1 if you change the pin.
-
-**Never** publish the control server on the internet without a reverse proxy that enforces TLS and authentication.
-
-See the [Gluetun control server documentation](https://github.com/qdm12/gluetun-wiki/blob/main/http_control_server.md) for the full API surface.
-
----
-
-## Prerequisites
-
-- Debian/Ubuntu-like system.
-  - Docker & Compose v2, plus basic tools.
-- ProtonVPN Plus or Unlimited plan with **port forwarding**.
-  - Have your Proton OpenVPN/IKEv2 username and password ready (no `+pmp`; the installer adds it for OpenVPN automatically).
-
-Install Docker & tooling (if needed):
-
+### 3) Quick start
+**OpenVPN + Proton PF**
 ```bash
-sudo apt update
-sudo apt install -y docker.io docker-compose-plugin curl wget openssl iproute2 xxd
-sudo systemctl enable --now docker
+cp arrconf/userconf.defaults.sh arrconf/userconf.sh  # optional overrides
+nano arrconf/userconf.sh                              # adjust paths, LAN_IP, ports (optional)
+./arrstack.sh --openvpn --yes
+# Web UI: http://${LOCALHOST_NAME:-localhost}:${QBT_HTTP_PORT_HOST}
 ```
 
-> Pre-seeding qBittorrent credentials requires **OpenSSL 3** (with `kdf`), `xxd`, and `base64`. If any are missing, the installer falls back to qBittorrent's temporary password. Setting `QBT_USER`/`QBT_PASS` is optional.
-
----
-
-## Quick start
-
-1. **Clone the repository to its own folder:**
-
-   ```bash
-   mkdir -p ~/srv && cd ~/srv
-   git clone https://github.com/cbkii/arrstack.git arrstackrepo
-   cd arrstackrepo
-   chmod +x arrstack.sh
-   ```
-
-   The installer writes configuration and runtime files under `~/srv/arrstack`, keeping the Git checkout clean.
-   Sensitive VPN materials go in `./arrconf/` (created in this repo). Keep the directory `chmod 700` and any files inside `chmod 600`.
-
-2. **Review and customise configuration:**
-
-   * Defaults live in `arrconf/userconf.defaults.sh`. Copy it to `arrconf/userconf.sh` and edit the values you want to override; the overrides file is sourced on every run so you can adjust it before the first install or later and rerun the script.
-  * Common tweaks: `LAN_IP`, download/media paths, qBittorrent credentials (`QBT_USER`/`QBT_PASS`), `QBT_WEBUI_PORT` (single source for the WebUI port), `GLUETUN_CONTROL_HOST`, `TIMEZONE`, and Proton server options (`SERVER_COUNTRIES`, `DEFAULT_VPN_TYPE`). Legacy `VPN_MODE` entries are migrated to `VPN_TYPE` automatically when you rerun the installer.
-     * Set `QBT_PASS` in **plain text** – the installer hashes it with PBKDF2 (via OpenSSL 3, `xxd`, and `base64`) before writing `qBittorrent.conf`. If the hashing deps are missing, the script warns and ignores these values.
-
-   ```bash
-   cp arrconf/userconf.defaults.sh arrconf/userconf.sh  # first-time: create overrides
-   nano arrconf/userconf.sh                             # edit overrides
-   nano arrstack-uninstall.sh                           # optional reset script
-   ```
-
-   * Place Proton credentials in `./arrconf/proton.auth` (two lines: `PROTON_USER=...` and `PROTON_PASS=...`). Keep the folder `chmod 700` and the file `chmod 600`.
-   * Proton port forwarding requires the OpenVPN username to end with **`+pmp`** (the installer auto-appends).
-   * Provider mode means no `.ovpn` file is needed – `VPN_SERVICE_PROVIDER=protonvpn` handles Proton configs. Drop `.ovpn` files only when using a custom provider.
-   * For WireGuard fallback, drop Proton `wg*.conf` files into `./arrconf/` (legacy `~/srv/...` paths are migrated automatically).
-   * LinuxServer/qB requires the mapped port and `WEBUI_PORT` to match; editing `QBT_WEBUI_PORT` updates the compose mapping, container setting, healthcheck and port-sync sidecar together.
-   * The installer writes a `.env` in `~/srv/arrstack` if you want to run `docker compose` manually.
-
-3. **Run it** as your normal user:
-
-   ```bash
-   ./arrstack.sh
-   ```
-
-   * It stops any existing Arr/qBittorrent services, creates folders, backups and config files, and **warns if `./arrconf/proton.auth` is missing**.
-   * Store your **plain** Proton username (OpenVPN / IKEv2 Username and Password, no `+pmp` suffix); the script adds `+pmp` automatically for OpenVPN port forwarding.
-   * When a Gluetun API key already exists, the installer prints a masked preview (first/last four characters) and asks if you want to reuse it. **Press Enter to reuse** (default) or answer `n` to rotate.
-   * If `.env` and `gluetun/auth/config.toml` ever disagree about the key, the preflight warns you and normalises everything to the TOML value — Gluetun only reads that file, so this protects running stacks.
-
-   ### Installer logging
-
-   - By default, the installer does not persist logs.
-   - Use `--debug` or `DEBUG=1` to keep logs under `${ARR_STACK_DIR}` (files are written with mode `0600`).
-   - Examples:
-
-     ```bash
-     ./arrstack.sh --debug
-     DEBUG=1 LOG_FILE_DEST="$ARR_STACK_DIR/arrstack-run.log" ./arrstack.sh
-     ```
-
-4. Open the UIs (replace `<LAN_IP>` with your host's LAN IP; default `192.168.1.11`):
-
-   * **qBittorrent:** `http://${LAN_IP}:${QBT_HTTP_PORT_HOST}`
-     * If `${QBT_USER}` and `${QBT_PASS}` are set and hashing deps are present (OpenSSL 3 with `kdf`, `xxd`, `base64`), the script hashes the password and you can log in with those credentials.
-     * Otherwise the installer prints a temporary admin password from the logs; log in as `admin/<printed>` and change it in qBittorrent.
-   * **Sonarr:** `http://${LAN_IP}:${SONARR_PORT}`
-   * **Radarr:** `http://${LAN_IP}:${RADARR_PORT}`
-   * **Prowlarr:** `http://${LAN_IP}:${PROWLARR_PORT}`
-   * **Bazarr:** `http://${LAN_IP}:${BAZARR_PORT}`
-   * **Gluetun API:** `http://${LAN_IP}:${GLUETUN_CONTROL_PORT}` (Basic auth user `gluetun`, password from `.env` `GLUETUN_API_KEY`)
-
-   > All UIs are exposed via the Gluetun service and bound to `LAN_IP`. Set `LAN_IP` at the top of `arrstack.sh` (e.g. `${GLUETUN_CONTROL_HOST}` for local-only or another LAN address to expose to your network). If you set `LAN_IP=0.0.0.0` to expose beyond your LAN, front the Gluetun control server with TLS and a strong auth proxy.
-   >
-   > Only `${GLUETUN_CONTROL_HOST}` (Gluetun's loopback) can access the API without a login (`WebUI\BypassLocalAuth=true`) so the pf-sync sidecar works; browsers on the LAN still require a password.
-   >
-   > The control API password lives in `.env` as `GLUETUN_API_KEY`; the installer generates it if blank.
-   >
-> Tip: After you log in, change the generated password. UPnP/NAT-PMP is disabled automatically.
->
-> If the installer can't find `LAN_IP` on the host, it warns and binds everything to `0.0.0.0`. Pair that fallback with host firewall rules before exposing services beyond your LAN.
-
-### Config files
-
-- `arrconf/userconf.defaults.sh` — **tracked defaults** (updated by repo on pull).
-- `arrconf/userconf.sh` — **your local overrides** (NOT tracked).
-
-The launcher loads defaults first, then your overrides:
-
-1. `arrconf/userconf.defaults.sh`
-2. `arrconf/userconf.sh` (if present)
-
-To see what changed after updates:
-
+**WireGuard (no Proton PF)**
 ```bash
-./arrstack.sh conf-diff
+# place proton.conf (or wg*.conf) in arrconf/ or a legacy search path first
+./arrstack.sh --wireguard --yes
+# Web UI: http://${LOCALHOST_NAME:-localhost}:${QBT_HTTP_PORT_HOST}
 ```
+Both modes prompt for nothing when `--yes` is used; credentials and secrets are sourced from `arrconf/` and `.env`.
 
-If you don’t have a `userconf.sh` yet, the tool will offer to create it from the defaults.
+### 4) Flags (CLI)
+| Flag | Meaning |
+| ---- | ------- |
+| `--openvpn` | Force `VPN_TYPE=openvpn` (enables Proton port forwarding workflow). |
+| `--wireguard` | Force `VPN_TYPE=wireguard` (skips PF sync). |
+| `--debug` | Persist installer logs under `${ARR_STACK_DIR}` (mode `0600`). |
+| `-y`, `--yes` | Non-interactive install and implicit proceed confirmation. |
+| `--no-prompt`, `--non-interactive` | Equivalent to `--yes`; set `ARR_NONINTERACTIVE=1` without showing prompts. |
+| `--rotate-apikey`, `--rotate-api-key`, `--rotate-key` | Force generation of a fresh `GLUETUN_API_KEY`. |
 
-#### One-time migration (if your userconf.sh is tracked)
+Additional command:
+- `./arrstack.sh conf-diff` – compare `arrconf/userconf.sh` overrides to the tracked defaults.
 
+### 5) Environment variables
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `ARR_BASE` | `/home/$USER/srv` | Root for stack data, backups, and docker configs. |
+| `ARR_STACK_DIR` | `${ARR_BASE}/arrstack` | Installer outputs (`.env`, compose file, logs) and log storage. |
+| `ARR_DOCKER_DIR` | `${ARR_BASE}/docker` | Per-service configuration volume mounts (e.g., `gluetun`, `qbittorrent`). |
+| `ARRCONF_DIR` | `${REPO_ROOT}/arrconf` | Secrets and overrides directory; enforced `700/600` permissions. |
+| `ARR_ENV_FILE` | `${ARR_STACK_DIR}/.env` | Generated Compose environment file consumed by the installer and docker compose. |
+| `LAN_IP` | `192.168.1.11` | Host bind for all service ports; `0.0.0.0` exposes every interface. |
+| `LOCALHOST_ADDR` / `LOCALHOST_NAME` | `127.0.0.1` / `localhost` | Default client host for Gluetun API and UI URLs. |
+| `GLUETUN_CONTROL_PORT` | `8000` | Gluetun control API port; mapped via `${LAN_IP}` and guarded by RBAC. |
+| `QBT_WEBUI_PORT` / `QBT_HTTP_PORT_HOST` | `8080` / `8081` | Internal and host ports for the qBittorrent Web UI. |
+| `MEDIA_DIR`, `DOWNLOADS_DIR`, `COMPLETED_DIR`, `MOVIES_DIR`, `TV_DIR`, `SUBS_DIR` | See defaults | Bind mounts for media and download libraries. |
+| `PUID` / `PGID` | Current user/group | Container runtime user identity. |
+| `TIMEZONE` | `Australia/Sydney` | Propagated to containers. |
+| `SERVER_COUNTRIES` | `Netherlands` | Gluetun server selection list for ProtonVPN. |
+| `UPDATER_PERIOD` | `24h` | Gluetun server list refresh interval (`0` disables updates). |
+| `PROTON_AUTH_FILE` | `${ARRCONF_DIR}/proton.auth` | Location of Proton credentials template (600 permissions). |
+| `VPN_TYPE` / `DEFAULT_VPN_TYPE` | `openvpn` | Active VPN mode; defaults can be overridden for unattended runs. |
+| `QBT_USER` / `QBT_PASS` | empty | Optional Web UI credentials pre-seeded when hashing dependencies exist. |
+| `GLUETUN_API_KEY` | generated | Control API RBAC secret written to `.env` and `gluetun/auth/config.toml`. |
+| `DEBUG` | `0` | When `1`, keeps installer logs (`--debug` sets this automatically). |
+
+#### Ports (host → container)
+
+All port bindings honour `LAN_IP`; keep it on an RFC1918 address unless you intend to expose the stack broadly.
+
+| Service | Host port | Container endpoint | Controlled by |
+| ------- | --------- | ------------------ | ------------- |
+| Gluetun control API | `${LAN_IP}:${GLUETUN_CONTROL_PORT}` | `0.0.0.0:${GLUETUN_CONTROL_PORT}` | `GLUETUN_CONTROL_PORT` |
+| qBittorrent Web UI | `${LAN_IP}:${QBT_HTTP_PORT_HOST}` | `qbittorrent:${QBT_WEBUI_PORT}` | `QBT_HTTP_PORT_HOST` / `QBT_WEBUI_PORT` |
+| Sonarr | `${LAN_IP}:${SONARR_PORT}` | `sonarr:${SONARR_PORT}` | `SONARR_PORT` |
+| Radarr | `${LAN_IP}:${RADARR_PORT}` | `radarr:${RADARR_PORT}` | `RADARR_PORT` |
+| Prowlarr | `${LAN_IP}:${PROWLARR_PORT}` | `prowlarr:${PROWLARR_PORT}` | `PROWLARR_PORT` |
+| Bazarr | `${LAN_IP}:${BAZARR_PORT}` | `bazarr:${BAZARR_PORT}` | `BAZARR_PORT` |
+| FlareSolverr | `${LAN_IP}:${FLARESOLVERR_PORT}` | `flaresolverr:${FLARESOLVERR_PORT}` | `FLARESOLVERR_PORT` |
+
+#### Default directories & mounts
+
+The installer creates these paths if they do not exist; adjust overrides in `arrconf/userconf.sh` before running.
+
+| Host directory | Container mount | Purpose / notes |
+| -------------- | ---------------- | --------------- |
+| `${ARR_STACK_DIR}` | n/a | Holds `.env`, `docker-compose.yml`, and saved logs. |
+| `${ARR_DOCKER_DIR}/gluetun` | `/gluetun` | Gluetun state, including WireGuard exports. |
+| `${ARR_DOCKER_DIR}/gluetun/auth` | `/gluetun/auth` | RBAC config (`config.toml`) for the control API. |
+| `${ARR_DOCKER_DIR}/qbittorrent` | `/config` | qBittorrent configuration (Vuetorrent mod included). |
+| `${DOWNLOADS_DIR}` | `/downloads` | Active downloads visible to qBittorrent and the *arr apps. |
+| `${COMPLETED_DIR}` | `/completed` | Completed torrents; qBittorrent and Sonarr/Radarr monitor this path. |
+| `${ARR_DOCKER_DIR}/sonarr` | `/config` | Sonarr configuration. |
+| `${ARR_DOCKER_DIR}/radarr` | `/config` | Radarr configuration. |
+| `${ARR_DOCKER_DIR}/prowlarr` | `/config` | Prowlarr configuration. |
+| `${ARR_DOCKER_DIR}/bazarr` | `/config` | Bazarr configuration. |
+| `${TV_DIR}` | `/tv` | Shared TV library mount (Sonarr, Bazarr). |
+| `${MOVIES_DIR}` | `/movies` | Shared movie library mount (Radarr, Bazarr). |
+| `${SUBS_DIR}` | `/subs` | Subtitle library for Bazarr. |
+
+> Advanced and legacy variables (e.g., `LEGACY_VPNCONFS_DIR`, `DRY_RUN`) are documented in `arrconf/userconf.defaults.sh`.
+
+### 6) What the installer does (high-level)
+1. Runs preflight checks: loads defaults/overrides, validates Proton secrets or WireGuard configs, resolves `LAN_IP`, and confirms the run unless `--yes` is set.
+2. Verifies/installs dependencies, then stops any existing containers, frees critical ports, halts native services, backs up data, and purges conflicting packages.
+3. Creates directory structure, tightens `arrconf/` permissions, migrates legacy Proton secrets, and ensures Proton auth files exist with `600` mode.
+4. Handles Gluetun API key reuse or rotation, writes RBAC config, and generates the `.env` plus Proton credentials/WireGuard variables.
+5. Seeds qBittorrent configuration and optional credentials, writes `docker-compose.yml`, pulls images, and bootstraps Gluetun with repeated health polling before launching the full stack and helper aliases.
+
+### 7) Runtime model
+- Docker Compose profiles: `bootstrap` starts only Gluetun; `prod` adds qBittorrent, the Proton PF synchroniser (OpenVPN only), and the *arr services.
+- Health gating: Gluetun must expose a healthy public IP (and OpenVPN PF when applicable) before `prod` services launch; qBittorrent’s health check polls `/api/v2/app/version` and each *arr container responds on its HTTP port.
+- The `pf-sync` sidecar watches Gluetun’s `/v1/openvpn/portforwarded` endpoint, pushes the value into qBittorrent via `/api/v2/app/setPreferences`, and forces UPnP off so the Proton assignment always wins.
+- Proton issues a fresh forwarded port every OpenVPN session. Expect qBittorrent’s listening port to change after reconnects or restarts.
+
+### 8) Daily operations
+- The installer copies `.aliasarr` to `${ARR_STACK_DIR}/.aliasarr` and appends `source ${ARR_STACK_DIR}/.aliasarr` to `~/.zshrc`. Source the file from other shells (e.g., `source ${ARR_STACK_DIR}/.aliasarr`) to load the helpers.
+- Common helpers:
+
+| Helper | Description |
+| ------ | ----------- |
+| `pvpn status` | Show Gluetun status, public IP, and the current forwarded port. |
+| `pvpn connect` / `pvpn reconnect` | Start or restart Gluetun + qBittorrent. |
+| `pvpn mode openvpn` / `pvpn mode wireguard` | Switch VPN mode (OpenVPN keeps Proton PF support). |
+| `pvpn port` | Print the forwarded port only. |
+| `qbtportsync` | Manually push the forwarded port into qBittorrent via its API (useful if PF drifts; replaces the legacy `pvpn portsync`). |
+| `arrvpncountry` (`arr_vpn_country`) | Request a Proton exit country using the Gluetun control API, falling back to priority order. |
+| `arrvpnfastest [limit]` (`arr_vpn_fastest`) | Probe preferred countries and switch to the fastest responsive endpoint. |
+
+### 9) Security notes
+- `arrconf/` and Proton credential files are forced to `700/600` to guard secrets; the installer rewrites `PROTON_USER` with `+pmp` inside `.env` when needed.
+- Gluetun’s control API exposes `/v1/publicip/ip`, `/v1/openvpn/status`, `/v1/openvpn/portforwarded`, and related endpoints. Basic auth is enforced via `${ARR_DOCKER_DIR}/gluetun/auth/config.toml`, with the secret stored in `${ARR_STACK_DIR}/.env` as `GLUETUN_API_KEY`.
+- The container listens on `0.0.0.0:${GLUETUN_CONTROL_PORT}` while the host bind honours `${LAN_IP}`. Keep `LAN_IP` on a private range or front the API with TLS + auth; never expose it publicly without safeguards.
+
+### 10) Logging
+- Default: logs stream to the terminal only; temporary files are discarded at exit.
+- `--debug` or `DEBUG=1` keeps a timestamped log in `${ARR_STACK_DIR}/arrstack-YYYYmmdd-HHMMSS.log` with permissions `0600` and refreshes the `arrstack-install.log` symlink.
+- Optional `LOG_FILE_DEST` (within `${ARR_STACK_DIR}`) lets you pin the final log name; the installer enforces path safety before writing.
+
+### 11) Troubleshooting
 ```bash
-git mv arrconf/userconf.sh arrconf/userconf.defaults.sh
-git commit -m "Track defaults; make userconf.sh user-local"
-cp arrconf/userconf.defaults.sh arrconf/userconf.sh
-printf "arrconf/userconf.sh\n" >> .gitignore
-git add .gitignore arrconf/userconf.defaults.sh
-git commit -m "Ignore userconf.sh; load defaults then overrides"
+# Check Gluetun container health
+docker inspect gluetun --format '{{.State.Health.Status}}'
+
+# Query public IP via Gluetun control API
+auth="--user gluetun:${GLUETUN_API_KEY}"  # omit if API key empty (WireGuard without RBAC is not allowed)
+curl -fsS ${auth} http://${LOCALHOST_ADDR:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip
+
+# Proton OpenVPN only
+curl -fsS ${auth} http://${LOCALHOST_ADDR:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status
+curl -fsS ${auth} http://${LOCALHOST_ADDR:-127.0.0.1}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded
+
+# Confirm qBittorrent is using the forwarded port
+curl -fsS http://${LOCALHOST_ADDR:-127.0.0.1}:${QBT_HTTP_PORT_HOST}/api/v2/app/preferences | jq '.listen_port'
 ```
 
-## Command-line flags & automation
-
-You can steer the installer from the command line when you need to override defaults or run unattended:
-
-- `--openvpn` — force the next run to pin `VPN_TYPE=openvpn` before writing `.env` or Compose files.
-- `--wireguard` — switch to the WireGuard profile (no Proton port forwarding) for this run.
-- `-y`, `--yes` — accept prompts automatically and enable non-interactive mode. Equivalent to combining `--no-prompt` with `ASSUME_YES=1`.
-- `--no-prompt`, `--non-interactive` — disable interactive prompts (defaults to reusing any existing Gluetun API key). Pair with `--rotate-apikey` when automation needs a fresh key.
-- `--rotate-apikey`, `--rotate-api-key`, `--rotate-key` — regenerate `GLUETUN_API_KEY` on the next run, even if a key already exists.
-
-The preflight always prefers the password stored in `gluetun/auth/config.toml` when `.env` and the TOML disagree, prints a warning, and syncs both files to that value. Interactive runs then show a masked preview and let you reuse or rotate; non-interactive runs keep the existing key unless you explicitly pass a rotate flag.
-
-Subcommands still work as before — for example `./arrstack.sh conf-diff` compares `userconf.sh` to the latest defaults and exits.
-
----
-
-## Key environment variables (single source of truth)
-
-| Variable                | What it controls                             | Typical value / notes                                   |
-|-------------------------|----------------------------------------------|---------------------------------------------------------|
-| `LAN_IP`                | Bind for all exported ports                  | e.g. `192.168.1.11` (LAN only). Installer falls back to `0.0.0.0` if the host lacks this IP.        |
-| `GLUETUN_CONTROL_HOST`  | Control server host **inside** the namespace | `127.0.0.1`                                             |
-| `GLUETUN_CONTROL_PORT`  | Control server port                          | `8000`                                                  |
-| `GLUETUN_HEALTH_TARGET` | Health-check target for Gluetun              | `1.1.1.1:443` (adjust if your ISP blocks it)            |
-| `GLUETUN_API_KEY`       | HTTP control server password                 | auto-generated; stored in `.env`                        |
-| `QBT_WEBUI_PORT`        | qB **internal** WebUI port                   | `8080`                                                  |
-| `QBT_HTTP_PORT_HOST`    | qB **host** port mapping                     | e.g. `8081` or another free port                        |
-| `PROTON_USER` / `PROTON_PASS` | Proton OpenVPN credentials (plain user; script adds `+pmp`) | required for PF                                      |
-| `SERVER_COUNTRIES`      | Allowed countries (OpenVPN)                  | start with `Netherlands` (known PF region)             |
-| `SERVER_CC_PRIORITY`    | Optional priority list for CLI helpers       | set in `userconf.sh`; CLI falls back to a built-in list if unset |
-| `DEFAULT_VPN_TYPE`      | Starting VPN mode (`openvpn` or `wireguard`) | `openvpn` for PF. Legacy `VPN_MODE` values are mapped automatically. |
-| `UPDATER_PERIOD`        | Gluetun server list updater                  | `24h` (`0` disables updates)                            |
-| `DOT`                   | DNS-over-TLS in Gluetun                      | `off` by default (compatibility)                        |
-| `TIMEZONE`              | TZ applied to containers                     | e.g. `Australia/Sydney`                                 |
-| `QBT_USER` / `QBT_PASS` | Optional preseeded qB credentials            | requires OpenSSL 3 + `xxd` + `base64`                   |
----
-
-## Ports & paths
-
-### Ports (host → container, via Gluetun namespace)
-
-| Service              | Host mapping                              | Container endpoint                    |
-|----------------------|-------------------------------------------|---------------------------------------|
-| qBittorrent WebUI    | `${LAN_IP}:${QBT_HTTP_PORT_HOST}`          | `127.0.0.1:${QBT_WEBUI_PORT}`         |
-| Gluetun control API  | `${LAN_IP}:${GLUETUN_CONTROL_PORT}`        | `127.0.0.1:${GLUETUN_CONTROL_PORT}`   |
-| Sonarr               | `${LAN_IP}:${SONARR_PORT}`                 | `127.0.0.1:${SONARR_PORT}`            |
-| Radarr               | `${LAN_IP}:${RADARR_PORT}`                 | `127.0.0.1:${RADARR_PORT}`            |
-| Prowlarr             | `${LAN_IP}:${PROWLARR_PORT}`               | `127.0.0.1:${PROWLARR_PORT}`          |
-| Bazarr               | `${LAN_IP}:${BAZARR_PORT}`                 | `127.0.0.1:${BAZARR_PORT}`            |
-| FlareSolverr         | `${LAN_IP}:${FLARESOLVERR_PORT}`           | `127.0.0.1:${FLARESOLVERR_PORT}`      |
-| Proton PF (BitTorrent)| n/a (assigned dynamically by Proton)       | forwarded directly inside qBittorrent |
-
-### Paths (container)
-
-- Downloads: `/downloads` (incomplete) → qB completes to `/completed`
-- Media libraries (defaults): `/tv`, `/movies`, `/subs`
-- Ensure Arr root folders match these container paths exactly.
-
----
-
-## Startup order & health-gates
-
-```mermaid
-flowchart TD
-  A[Gluetun container started] --> B[Arr apps (Sonarr/Radarr/\nProwlarr/Bazarr/FlareSolverr)]
-  A --> C{Gluetun healthy \n+ PF assigned}
-  C --> D[qBittorrent healthy]
-  C --> E[pf-sync applying PF]
-```
-
-Services are split across two Compose profiles:
-
-* **`bootstrap`** — Gluetun plus the Arr/indexer apps. They depend on `condition: service_started`, so they can initialise while Gluetun negotiates Proton PF.
-* **`prod`** — Adds qBittorrent and, when `VPN_TYPE=openvpn`, the pf-sync sidecar. These still require Gluetun to report healthy **and** return a PF port.
-
-The installer runs `bootstrap` first, waits up to ~600 s for Gluetun to report healthy with a port, then promotes the `prod` profile. If you manage the stack manually, mirror that flow:
-
-```bash
-docker compose --profile bootstrap up -d
-# wait for Gluetun health + PF
-docker compose --profile prod up -d
-```
-
-All services keep their individual healthchecks; only qBittorrent (and pf-sync when OpenVPN is in use) gate on Gluetun health.
-
-Service healthchecks stay on loopback HTTP endpoints that do **not** require API keys. Arr applications have historically moved or restricted `/ping`-style endpoints, so simple local HTTP/TCP checks remain stable across upstream updates.
-
----
-
-## Default folders & mapping
-
-- Base: `~/srv`
-- Compose & `.env`: `~/srv/arrstack`
-  - `docker compose` explicitly uses this file via `--env-file` (`ARR_ENV_FILE`)
-- App data: `~/srv/docker/<service>`
-- Downloads: `~/Downloads` → mounted in qB as `/downloads`
-- Completed: `~/Downloads/completed` → `/completed`
-- Media libraries (defaults):
-  - TV: `/media/arrs/shows` → `/tv`
-  - Movies: `/media/arrs/movies` → `/movies`
-  - Subs: `/media/arrs/subs` → `/subs`
-
-In each Arr app, add the **qBittorrent** client and ensure paths match these container paths.
-
----
-
-## Daily use
-
-The installer drops helper aliases at `~/srv/arrstack/.aliasarr` and sources them from `~/.zshrc`:
-
-```bash
-# already added to ~/.zshrc
-[ -f ~/srv/arrstack/.aliasarr ] && source ~/srv/arrstack/.aliasarr
-pvpn status   # show mode, public IP, forwarded port
-```
-
-Common `pvpn` commands:
-
-```bash
-pvpn connect      # start Gluetun + qBittorrent
-pvpn reconnect    # restart Gluetun
-pvpn mode ovpn    # switch to OpenVPN (recommended for port forwarding)
-pvpn mode wg      # switch to WireGuard (optional)
-pvpn creds        # update Proton username/password (adds +pmp automatically)
-pvpn paths        # show credential & config locations
-pvpn portsync     # force qB to use the currently forwarded port
-```
-
-1. **Initial location is random within `SERVER_COUNTRIES`.** Keep the list short (1–3) and start with countries that reliably support Proton port forwarding. We default to:
-
-   ```
-   SERVER_COUNTRIES="Netherlands"
-   ```
-
-   * Why Netherlands? Proton exposes the broadest set of PF-capable OpenVPN servers there. Once you confirm port forwarding works, expand the list (e.g. Switzerland, Iceland, Sweden) or pin specific endpoints with `SERVER_HOSTNAMES`.
-
-2. **Switching later** is easy via `.aliasarr`:
-
-  * `arr_vpn_country "<Country>"` — switch to a specific country; if it fails, the function retries through `SERVER_CC_PRIORITY` (falls back to a built-in list if unset).
-  * `arr_vpn_fastest [N]` — probe the first *N* countries in `SERVER_CC_PRIORITY` (default 6; built-in list used if unset), pick the lowest RTT from AU, and switch there.
-   * `arr_vpn_servers` — list Proton countries from the current server list.
-
-3. **Priority list used for switching/speed trials from Australia** (fast → slow):
-
-   ```
-   SERVER_CC_PRIORITY="Australia,Singapore,Japan,Hong Kong,United States,United Kingdom,Netherlands,Germany,Switzerland,Spain,Romania,Luxembourg"
-   ```
-
-   * Rationale: geographic proximity/typical subsea paths from AU → SE/E Asia → US-West → Western Europe. Validate with your line by running `arr_vpn_fastest`.
-
----
-
-## qBittorrent API usage & Proton PF behaviour
-
-### qBittorrent endpoints we rely on
-
-- **Healthcheck:** `GET http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/version` → 200 OK.
-- **Apply Proton PF port:** `POST http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/setPreferences` with JSON body `{"listen_port":<integer>,"upnp":false}`.
-  - `listen_port` **must** be an integer (unquoted). qB rejects quoted numbers.
-  - UPnP/NAT-PMP remain disabled to prevent clobbering the Proton-assigned port.
-
-See the [qBittorrent Web API documentation](https://github.com/qbittorrent/qBittorrent/wiki/Web-API-Documentation#application) for reference.
-
-### Proton port forwarding behaviour
-
-- Proton PF is only available on **OpenVPN** and requires the username suffix `+pmp`. The installer ensures the suffix is present when writing `.env`.
-- The stack treats PF as a readiness gate. Gluetun must return an `IP:port` string from `/v1/openvpn/portforwarded` before qBittorrent starts.
-- A sidecar polls the control API every 45 seconds and applies the current PF port through qBittorrent’s API.
-- The forwarded port is session-based; expect it to change whenever Gluetun reconnects.
-
----
-
-## ProtonVPN + Gluetun notes (2024/2025)
-
-- Use Proton’s OpenVPN credentials with the `+pmp` suffix for port forwarding. These differ from your standard Proton login.
-- The stack pins Gluetun to `v3.38.0`. Gluetun `v3.39+` filters Proton servers too aggressively and often reports “no servers available”. We leave `UPDATER_PERIOD=24h` so Gluetun refreshes Proton’s server metadata once a day; set it to `0` if you need to freeze a known-good list. If issues persist, specify exact `SERVER_HOSTNAMES` like `node-xx-xx.protonvpn.net`.
-- Port forwarding only works on Proton’s P2P servers and a new port is assigned each session. qBittorrent’s listening port is synced automatically by a sidecar that polls Gluetun’s API.
-- Recommended health check tuning: `HEALTH_VPN_DURATION_INITIAL=30s` and `HEALTH_SUCCESS_WAIT_DURATION=10s` with `HEALTH_TARGET_ADDRESS=1.1.1.1:443`.
-
----
-
-## Optional: WireGuard fallback
-
-If you want to enable the fallback to wireguard, download a Proton **WireGuard** `.conf` from their site and place it in `./arrconf/` (name it `wg*.conf` or `proton.conf`).
-
-1. Re-run the installer once (it may auto-seed the private key).
-2. Switch when you want:
-
-   ```bash
-   pvpn mode wg
-   pvpn status
-   ```
-
-> Port forwarding is typically most reliable with **OpenVPN**. Use WG when PF is not required.
-
----
-
-## Troubleshooting
-
-### Quick checks
-
-1. Confirm the container is up:
-
-   ```bash
-   docker ps | grep gluetun
-   ```
-
-2. Inspect Gluetun & PF status:
-
-   ```bash
-   curl -fsS http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/publicip/ip
-   curl -fsS http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status
-   curl -fsS http://${LAN_IP}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded
-   ```
-
-3. Verify the effective Proton username ends with `+pmp`:
-
-   ```bash
-   grep OPENVPN_USER ~/srv/arrstack/.env
-   ```
-
-4. Query qBittorrent directly:
-
-   ```bash
-   curl -fsS http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/version
-   curl -fsS -X POST --data 'json={"cmd":"preferences"}' http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/preferences
-   ```
-
-5. Force a PF refresh:
-
-   ```bash
-   pvpn portsync
-   ```
-
-### Common scenarios
-
-- **Slow first boot?** Images must pull and Gluetun has a generous health `start_period`. Expect the first run to take longer; subsequent restarts reuse cached images.
-- **Gluetun unhealthy?** Check `docker logs -f gluetun` and verify DNS/TLS reachability. Consider lowering `HEALTH_TARGET_ADDRESS` to a local resolver if you block 1.1.1.1.
-- **DNS issues?** With `DOT=off` the stack uses plain DNS for compatibility. Enable `DOT=on` once your resolver supports it (see [privacy defaults](#privacy-defaults-dot--upgrades)).
-- **WireGuard MTU problems?** Lower `WIREGUARD_MTU` in `.env` from `1320` to `1280` or `1200`.
-- **Need to reseed Proton creds?** Update `./arrconf/proton.auth` and rerun the installer.
-
-To adjust exposure, edit `LAN_IP` in `arrstack.sh` (e.g., `${GLUETUN_CONTROL_HOST}` for local-only or `0.0.0.0` for all) and rerun:
-
-```bash
-~/srv/arrstackrepo/arrstack.sh
-```
-
----
-
-## Privacy defaults (DoT) & upgrades
-
-### DNS-over-TLS (DoT)
-
-- Default: `DOT=off` for compatibility during first run or on flaky resolvers.
-- After the stack is stable, consider setting `DOT=on` to encrypt DNS inside Gluetun.
-
-### Upgrading Gluetun and the stack
-
-- Re-run `./arrstack.sh` or `docker compose pull && docker compose up -d` in `~/srv/arrstack` to refresh images.
-- Review Gluetun release notes before unpinning. We suggest targeting ≥`v3.39.1` (or current stable) for improved control-server auth if Proton’s server filtering issues are resolved.
-- If a new Gluetun release breaks Proton discovery, pin back to `v3.38.0` or a known-good tag and optionally set `SERVER_HOSTNAMES`.
-
----
-
-## Known limitations
-
-- Proton PF is OpenVPN-only (`+pmp` suffix required); WireGuard fallback has **no** PF support.
-- FlareSolverr can briefly spike CPU/RAM while solving challenges; short bursts are expected.
-- Proton only forwards one port per session; reconnects change the port and trigger qBittorrent updates.
-
----
-
-## Uninstall / restore
-
-Run the provided `arrstack-uninstall.sh` script to back up existing configurations to `~/srv/backups/uninstall-<timestamp>/` and remove Docker containers, native packages and related files. After cleanup you can re-run `arrstack.sh` to reinstall. Restores can be made by extracting the archives from the backup directory back to their original locations.
-
-```bash
-~/srv/arrstack-uninstall.sh
-```
-
----
-
-## Notes
-
-- Proton credentials live at `./arrconf/proton.auth` (`chmod 600` inside a `chmod 700` folder). Legacy files under `~/srv/docker/gluetun/` or `~/srv/wg-configs/` are migrated automatically. Use your plain Proton username; `+pmp` is added automatically for OpenVPN port forwarding.
-- `.env` is also `chmod 600` and only contains what Compose needs.
-- You can customise paths and ports by editing the variables at the top of the script before running it.
-- Scripts avoid `set -e` and log warnings by default; using `die` only for genuine unsafe conditions.
+| Issue | Resolution |
+| ----- | ---------- |
+| Preflight aborts: Proton creds missing | Fill `PROTON_USER`/`PROTON_PASS` in `${PROTON_AUTH_FILE}` (no `+pmp`) and rerun. |
+| WireGuard mode fails to start | Ensure `proton.conf` (or a `wg*.conf`) exists in a searched directory and is a valid Proton export. |
+| Ports already in use | Free the ports listed in the prerequisites; installer will try to kill conflicting listeners but may require manual cleanup. |
+| LAN_IP reset to `0.0.0.0` | Update `LAN_IP` in `arrconf/userconf.sh` to a host-local RFC1918 address and rerun. |
+| Need a new Gluetun API key | Run `./arrstack.sh --rotate-apikey --debug` (optional) to regenerate and persist a fresh key. |
+| Proton PF mismatch (OpenVPN) | Compare the Gluetun and qBittorrent port values above; run `qbtportsync` or restart `pf-sync`. |
+
+### 12) Limits & upgrades
+- Proton port forwarding only works in OpenVPN mode; WireGuard runs without PF or the `pf-sync` helper.
+- Expect Proton to rotate forwarded ports each reconnection; allow `pf-sync` (or `qbtportsync`) to keep qBittorrent aligned.
+- FlareSolverr can spike CPU/RAM while solving challenges—budget headroom or scale the container accordingly.
+- DNS-over-TLS (`DOT`) ships disabled for stability; set `DOT="on"` in `arrconf/userconf.sh` once you validate Proton’s DoT endpoints.
+- Gluetun is pinned to `qmcgaw/gluetun:v3.38.0`; review upstream release notes before moving to a newer tag.
+
+### 13) Uninstall / clean up
+- Stop the stack but keep data: `cd ${ARR_STACK_DIR} && docker compose down --remove-orphans` (Compose file and `.env` live here).
+- Full removal with backups: run `./arrstack-uninstall.sh` to archive configs, remove containers/images, purge native packages, and free mapped ports (review the script before executing).
+- Configs persist under `${ARR_DOCKER_DIR}` and `${ARR_STACK_DIR}`; delete them manually if you no longer need cached data.
