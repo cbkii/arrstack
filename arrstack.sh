@@ -1199,6 +1199,80 @@ seed_qbt_credentials_if_requested() {
   fi
 }
 
+verify_qbt_credentials_for_pf_sync() {
+  local cfg stored_user hash_line payload salt_b64 dk_b64 salt_hex derived
+
+  cfg="$(ensure_qbt_conf_base)" || return
+
+  if [ -z "${QBT_USER:-}" ] && [ -z "${QBT_PASS:-}" ]; then
+    note "QBT_USER/QBT_PASS not set; pf-sync will rely on qBittorrent's local-auth bypass."
+    return
+  fi
+
+  if [ -z "${QBT_USER:-}" ] || [ -z "${QBT_PASS:-}" ]; then
+    warn "Both QBT_USER and QBT_PASS must be populated for pf-sync to log in. Update arrconf/userconf.sh or reset the qB WebUI password."
+    return
+  fi
+
+  stored_user="$(grep -E '^WebUI\\\\Username=' "${cfg}" | head -n1 | cut -d= -f2- || true)"
+  if [ -n "${stored_user}" ] && [ "${stored_user}" != "${QBT_USER}" ]; then
+    warn "QBT_USER ('${QBT_USER}') does not match qBittorrent WebUI username ('${stored_user}'); pf-sync login will fail until they are aligned."
+  fi
+
+  hash_line="$(grep -E '^WebUI\\\\Password_PBKDF2=' "${cfg}" | tail -n1 || true)"
+  if [ -z "${hash_line}" ]; then
+    warn "Could not find a WebUI password hash in ${cfg}; pf-sync credential verification skipped."
+    return
+  fi
+
+  if ! check_hash_deps >/dev/null 2>&1; then
+    warn "Skipping qBittorrent credential verification (OpenSSL 3 PBKDF2 helpers unavailable)."
+    return
+  fi
+
+  payload="$(printf '%s\n' "${hash_line}" | sed -E 's/^WebUI\\\\Password_PBKDF2="@ByteArray\(([^"]+)\)"$/\1/' || true)"
+  if [ -z "${payload}" ]; then
+    warn "Unable to parse qBittorrent password hash from ${cfg}; pf-sync login may fail."
+    return
+  fi
+
+  salt_b64="${payload%%:*}"
+  dk_b64="${payload##*:}"
+  if [ -z "${salt_b64}" ] || [ -z "${dk_b64}" ]; then
+    warn "Parsed qBittorrent password hash was incomplete; pf-sync login may fail."
+    return
+  fi
+
+  if command -v xxd >/dev/null 2>&1; then
+    salt_hex="$(printf '%s' "${salt_b64}" | base64 -d 2>/dev/null | xxd -p -c 256 | tr -d '\n' || true)"
+  else
+    salt_hex="$(printf '%s' "${salt_b64}" | base64 -d 2>/dev/null | od -An -tx1 | tr -d ' \n' || true)"
+  fi
+
+  if [ -z "${salt_hex}" ]; then
+    warn "Failed to decode qBittorrent password salt; pf-sync login verification skipped."
+    return
+  fi
+
+  derived="$(openssl kdf -binary -keylen 64 \
+    -kdfopt digest:SHA512 \
+    -kdfopt pass:"${QBT_PASS}" \
+    -kdfopt hexsalt:"${salt_hex}" \
+    -kdfopt iter:100000 \
+    PBKDF2 | base64 | tr -d '\n' || true)"
+
+  if [ -z "${derived}" ]; then
+    warn "Failed to derive PBKDF2 hash for qBittorrent credentials; pf-sync login verification skipped."
+    return
+  fi
+
+  if [ "${derived}" != "${dk_b64}" ]; then
+    warn "QBT_PASS does not match the password stored in ${cfg}; pf-sync will be unable to authenticate until they match."
+  else
+    ok "Verified qBittorrent WebUI credentials for pf-sync login."
+  fi
+}
+
 print_qbt_temp_password_if_any() {
   if [ -z "${QBT_USER:-}" ] || [ -z "${QBT_PASS:-}" ]; then
     sleep 3
@@ -1360,11 +1434,29 @@ YAML
           echo "[pf-sync] Gluetun not ready yet; retrying in 5s";
           sleep 5;
         done;
+        LOGIN_STATE="";
         echo "[pf-sync] Waiting for qBittorrent API...";
         until curl -fsS "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/version" >/dev/null 2>&1; do
           echo "[pf-sync] qBittorrent not ready yet; retrying in 5s";
           sleep 5;
         done;
+        if [ -n "$${QBT_USERNAME}" ] && [ -n "$${QBT_PASSWORD}" ]; then
+          echo "[pf-sync] Validating supplied qBittorrent credentials...";
+          if curl -fsS -c /tmp/qbt.cookie "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/auth/login" \
+            --data "username=$${QBT_USERNAME}&password=$${QBT_PASSWORD}" >/dev/null 2>&1; then
+            echo "[pf-sync] qBittorrent login succeeded; authenticated API ready.";
+            LOGIN_STATE="auth-ok";
+          else
+            echo "[pf-sync] WARNING: Initial qBittorrent login failed; pf-sync will keep retrying. Check QBT_USER/QBT_PASS or reset the WebUI password." >&2;
+            LOGIN_STATE="auth-fail";
+          fi;
+          rm -f /tmp/qbt.cookie 2>/dev/null || true;
+        else
+          echo "[pf-sync] No WebUI credentials provided; relying on local authentication bypass.";
+          LOGIN_STATE="anon";
+        fi;
+        echo "[pf-sync] Requesting Proton forwarded port lease from Gluetun...";
+        curl -fsS $${AUTH_HEADER} -X POST "$${API_ROOT}/v1/openvpn/forwardport" >/dev/null 2>&1 || true;
         CUR="";
         STATE="init";
         LAST_SLEEP="";
@@ -1383,17 +1475,43 @@ YAML
             if [ "$$P" != "$$CUR" ]; then
               echo "[pf-sync] Applying Proton PF port $$P to qBittorrent";
               if [ -n "$${QBT_USERNAME}" ] && [ -n "$${QBT_PASSWORD}" ]; then
-                curl -fsS -c /tmp/qbt.cookie "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/auth/login" \
-                  --data "username=$${QBT_USERNAME}&password=$${QBT_PASSWORD}" >/dev/null 2>&1 && \
-                curl -fsS -b /tmp/qbt.cookie \
-                  "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
-                  --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1;
+                COOKIE=/tmp/qbt.cookie;
+                if curl -fsS -c "$$COOKIE" "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/auth/login" \
+                  --data "username=$${QBT_USERNAME}&password=$${QBT_PASSWORD}" >/dev/null 2>&1; then
+                  if curl -fsS -b "$$COOKIE" \
+                    "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
+                    --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1; then
+                    CUR="$$P";
+                    if [ "$$LOGIN_STATE" != "auth-ok" ]; then
+                      echo "[pf-sync] Authenticated qBittorrent API access restored.";
+                    fi;
+                    LOGIN_STATE="auth-ok";
+                  else
+                    if [ "$$LOGIN_STATE" != "auth-set-fail" ]; then
+                      echo "[pf-sync] ERROR: Authenticated port update request failed; inspect qBittorrent logs." >&2;
+                    fi;
+                    LOGIN_STATE="auth-set-fail";
+                  fi;
+                else
+                  if [ "$$LOGIN_STATE" != "auth-fail" ]; then
+                    echo "[pf-sync] ERROR: qBittorrent login failed for user '$${QBT_USERNAME}'. Verify QBT_USER/QBT_PASS or reset the WebUI password." >&2;
+                  fi;
+                  LOGIN_STATE="auth-fail";
+                fi;
+                rm -f "$$COOKIE" 2>/dev/null || true;
               else
-                curl -fsS -X POST \
+                if curl -fsS -X POST \
                   "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
-                  --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1;
+                  --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1; then
+                  CUR="$$P";
+                  LOGIN_STATE="anon";
+                else
+                  if [ "$$LOGIN_STATE" != "anon-fail" ]; then
+                    echo "[pf-sync] ERROR: Failed to update qBittorrent listen port without credentials; enable the local auth bypass or set QBT_USER/QBT_PASS." >&2;
+                  fi;
+                  LOGIN_STATE="anon-fail";
+                fi;
               fi;
-              CUR="$$P";
             fi;
             curl -fsS $${AUTH_HEADER} -X POST "$${API_ROOT}/v1/openvpn/forwardport" >/dev/null 2>&1 || true;
             if [ "$$STATE" != "ready" ]; then
@@ -1751,6 +1869,7 @@ main() {
   seed_wireguard_from_conf
   ensure_qbt_conf
   seed_qbt_credentials_if_requested
+  verify_qbt_credentials_for_pf_sync
   write_compose
   pull_images
   start_with_checks
