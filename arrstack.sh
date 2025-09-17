@@ -237,6 +237,31 @@ ok() { out "$(ts) ${C_GREEN}✔ $1${C_RESET}"; }
 # shellcheck disable=SC2015
 trace() { [ "$DEBUG" = "1" ] && printf "[trace] %s\n" "$1" >>"${LOG_FILE}" || true; }
 
+print_help() {
+  cat <<'EOF'
+Usage: ./arrstack.sh [options] [subcommand]
+
+Options:
+  --openvpn                           Pin VPN_TYPE=openvpn for this run.
+  --wireguard                         Pin VPN_TYPE=wireguard for this run.
+  --debug                             Enable verbose logging and keep the installer log.
+  -y, --yes                           Auto-confirm prompts and run non-interactively (sets
+                                      ASSUME_YES=1 and ARR_NONINTERACTIVE=1).
+  --no-prompt, --non-interactive      Skip interactive questions; still reuses any existing
+                                      Gluetun API key unless you also rotate it.
+  --rotate-apikey, --rotate-api-key,
+  --rotate-key                        Force regeneration of the Gluetun API key on this run.
+  -h, --help                          Show this message and exit.
+
+Subcommands:
+  conf-diff                           Compare userconf.sh to the latest defaults and exit.
+
+Examples:
+  ./arrstack.sh --openvpn
+  ASSUME_YES=1 ./arrstack.sh --no-prompt
+EOF
+}
+
 parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -263,6 +288,10 @@ parse_args() {
         ;;
       --rotate-apikey|--rotate-api-key|--rotate-key)
         FORCE_ROTATE_API_KEY=1
+        ;;
+      -h|--help)
+        print_help
+        exit 0
         ;;
     esac
     shift
