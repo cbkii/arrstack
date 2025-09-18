@@ -155,6 +155,17 @@ export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEM
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_TYPE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
 
+: "${GLUETUN_IMAGE:=qmcgaw/gluetun:v3.38.0}"
+: "${QBITTORRENT_IMAGE:=lscr.io/linuxserver/qbittorrent:latest}"
+: "${QBT_DOCKER_MODS:=ghcr.io/gabe565/linuxserver-mod-vuetorrent}"
+: "${PF_SYNC_IMAGE:=curlimages/curl:8.8.0}"
+: "${SONARR_IMAGE:=lscr.io/linuxserver/sonarr:latest}"
+: "${RADARR_IMAGE:=lscr.io/linuxserver/radarr:latest}"
+: "${PROWLARR_IMAGE:=lscr.io/linuxserver/prowlarr:latest}"
+: "${BAZARR_IMAGE:=lscr.io/linuxserver/bazarr:latest}"
+: "${FLARESOLVERR_IMAGE:=ghcr.io/flaresolverr/flaresolverr:latest}"
+export GLUETUN_IMAGE QBITTORRENT_IMAGE QBT_DOCKER_MODS PF_SYNC_IMAGE SONARR_IMAGE RADARR_IMAGE PROWLARR_IMAGE BAZARR_IMAGE FLARESOLVERR_IMAGE
+
 # non-interactive mode & key-rotation control
 : "${ARR_NONINTERACTIVE:=0}"
 : "${FORCE_ROTATE_API_KEY:=0}"
@@ -879,7 +890,7 @@ make_gluetun_apikey() {
     fi
 
     local generated="" rc=0
-    local -r gluetun_image="qmcgaw/gluetun:v3.38.0"
+    local -r gluetun_image="${GLUETUN_IMAGE}"
     if command -v docker >/dev/null 2>&1; then
       if ! docker image inspect "${gluetun_image}" >/dev/null 2>&1; then
         _log_cmd docker pull "${gluetun_image}"
@@ -962,6 +973,17 @@ TIMEZONE=${TIMEZONE}
 
 # Gluetun Control-Server API key
 GLUETUN_API_KEY=${GLUETUN_API_KEY}
+
+# Container images
+GLUETUN_IMAGE=${GLUETUN_IMAGE}
+QBITTORRENT_IMAGE=${QBITTORRENT_IMAGE}
+QBT_DOCKER_MODS=${QBT_DOCKER_MODS}
+PF_SYNC_IMAGE=${PF_SYNC_IMAGE}
+SONARR_IMAGE=${SONARR_IMAGE}
+RADARR_IMAGE=${RADARR_IMAGE}
+PROWLARR_IMAGE=${PROWLARR_IMAGE}
+BAZARR_IMAGE=${BAZARR_IMAGE}
+FLARESOLVERR_IMAGE=${FLARESOLVERR_IMAGE}
 
 # Network and qBittorrent
 GLUETUN_CONTROL_PORT=${GLUETUN_CONTROL_PORT}
@@ -1295,7 +1317,7 @@ write_compose() {
     cat <<'YAML'
 services:
   gluetun:
-    image: qmcgaw/gluetun:v3.38.0
+    image: ${GLUETUN_IMAGE}
     container_name: gluetun
     profiles: ["bootstrap","prod"]
     cap_add: ["NET_ADMIN"]
@@ -1376,13 +1398,13 @@ YAML
     restart: unless-stopped
 
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
+    image: ${QBITTORRENT_IMAGE}
     container_name: qbittorrent
     profiles: ["prod"]
     network_mode: "service:gluetun"
     environment:
       WEBUI_PORT: ${QBT_WEBUI_PORT}
-      DOCKER_MODS: ghcr.io/gabe565/linuxserver-mod-vuetorrent
+      DOCKER_MODS: ${QBT_DOCKER_MODS}
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
@@ -1405,7 +1427,7 @@ YAML
     if [ "${VPN_TYPE}" = "openvpn" ]; then
       cat <<'YAML'
   pf-sync:
-    image: curlimages/curl:8.8.0
+    image: ${PF_SYNC_IMAGE}
     container_name: pf-sync
     profiles: ["prod"]
     network_mode: "service:gluetun"
@@ -1561,7 +1583,7 @@ YAML
     cat <<'YAML'
 
   sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
+    image: ${SONARR_IMAGE}
     container_name: sonarr
     profiles: ["prod"]
     network_mode: "service:gluetun"
@@ -1576,7 +1598,7 @@ YAML
       - ${COMPLETED_DIR}:/completed
     depends_on:
       gluetun:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${SONARR_PORT} >/dev/null"]
       interval: 30s
@@ -1586,7 +1608,7 @@ YAML
     restart: unless-stopped
 
   radarr:
-    image: lscr.io/linuxserver/radarr:latest
+    image: ${RADARR_IMAGE}
     container_name: radarr
     profiles: ["prod"]
     network_mode: "service:gluetun"
@@ -1601,7 +1623,7 @@ YAML
       - ${COMPLETED_DIR}:/completed
     depends_on:
       gluetun:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${RADARR_PORT} >/dev/null"]
       interval: 30s
@@ -1611,7 +1633,7 @@ YAML
     restart: unless-stopped
 
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr:latest
+    image: ${PROWLARR_IMAGE}
     container_name: prowlarr
     profiles: ["prod"]
     network_mode: "service:gluetun"
@@ -1623,7 +1645,7 @@ YAML
       - ${ARR_DOCKER_DIR}/prowlarr:/config
     depends_on:
       gluetun:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${PROWLARR_PORT} >/dev/null"]
       interval: 30s
@@ -1633,7 +1655,7 @@ YAML
     restart: unless-stopped
 
   bazarr:
-    image: lscr.io/linuxserver/bazarr:latest
+    image: ${BAZARR_IMAGE}
     container_name: bazarr
     profiles: ["prod"]
     network_mode: "service:gluetun"
@@ -1648,7 +1670,7 @@ YAML
       - ${SUBS_DIR}:/subs
     depends_on:
       gluetun:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${BAZARR_PORT} >/dev/null"]
       interval: 30s
@@ -1658,7 +1680,7 @@ YAML
     restart: unless-stopped
 
   flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+    image: ${FLARESOLVERR_IMAGE}
     container_name: flaresolverr
     profiles: ["prod"]
     network_mode: "service:gluetun"
@@ -1666,7 +1688,7 @@ YAML
       LOG_LEVEL: info
     depends_on:
       gluetun:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${FLARESOLVERR_PORT} >/dev/null"]
       interval: 30s
@@ -1728,7 +1750,7 @@ start_with_checks() {
     fi
     local health_window=$((180 + 10 * 30))
     local max_wait=$((health_window + 120))
-    if ! docker image inspect qmcgaw/gluetun:v3.38.0 >/dev/null 2>&1; then
+    if ! docker image inspect "${GLUETUN_IMAGE}" >/dev/null 2>&1; then
       max_wait=$((max_wait + 60))
     fi
     note "Waiting for gluetun to report healthy (up to ${max_wait}s)..."
