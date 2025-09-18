@@ -159,7 +159,7 @@ ARR_ENV_FILE="${ARR_ENV_FILE:-${ARR_STACK_DIR}/.env}"
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_ENV_FILE LEGACY_VPNCONFS_DIR ARRCONF_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MOVIES_DIR TV_DIR SUBS_DIR
-export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP LOCALHOST_ADDR LOCALHOST_NAME GLUETUN_CONTROL_PORT GLUETUN_CONTROL_BIND_HOST GLUETUN_CONTROL_LISTEN_ADDR GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE UPDATER_PERIOD
+export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP ARR_BIND_ADDRESS SONARR_BIND_ADDRESS RADARR_BIND_ADDRESS PROWLARR_BIND_ADDRESS BAZARR_BIND_ADDRESS LOCALHOST_ADDR LOCALHOST_NAME GLUETUN_CONTROL_PORT GLUETUN_CONTROL_BIND_HOST GLUETUN_CONTROL_LISTEN_ADDR GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET GLUETUN_FIREWALL_OUTBOUND_SUBNETS GLUETUN_FIREWALL_INPUT_PORTS GLUETUN_HTTPPROXY GLUETUN_SHADOWSOCKS PUID PGID TIMEZONE UPDATER_PERIOD
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_TYPE SERVER_COUNTRIES SERVER_HOSTNAMES DEFAULT_COUNTRY GLUETUN_API_KEY
 
@@ -1056,9 +1056,18 @@ QBT_HTTP_PORT_HOST=${QBT_HTTP_PORT_HOST}
 QBT_WEBUI_PORT=${QBT_WEBUI_PORT}
 GLUETUN_CONTROL_HOST=${GLUETUN_CONTROL_HOST}
 GLUETUN_HEALTH_TARGET=${GLUETUN_HEALTH_TARGET}
+GLUETUN_FIREWALL_OUTBOUND_SUBNETS=${GLUETUN_FIREWALL_OUTBOUND_SUBNETS}
+GLUETUN_FIREWALL_INPUT_PORTS=${GLUETUN_FIREWALL_INPUT_PORTS}
+GLUETUN_HTTPPROXY=${GLUETUN_HTTPPROXY}
+GLUETUN_SHADOWSOCKS=${GLUETUN_SHADOWSOCKS}
 QBT_USER=${QBT_USER}
 QBT_PASS=${QBT_PASS}
 LAN_IP=${LAN_IP}
+ARR_BIND_ADDRESS=${ARR_BIND_ADDRESS}
+SONARR_BIND_ADDRESS=${SONARR_BIND_ADDRESS}
+RADARR_BIND_ADDRESS=${RADARR_BIND_ADDRESS}
+PROWLARR_BIND_ADDRESS=${PROWLARR_BIND_ADDRESS}
+BAZARR_BIND_ADDRESS=${BAZARR_BIND_ADDRESS}
 SONARR_PORT=${SONARR_PORT}
 RADARR_PORT=${RADARR_PORT}
 PROWLARR_PORT=${PROWLARR_PORT}
@@ -1183,6 +1192,7 @@ WebUI\\ClickjackingProtection=true
 WebUI\\HostHeaderValidation=true
 WebUI\\HTTPS\\Enabled=false
 WebUI\\Address=*
+WebUI\\AlternativeUIEnabled=false
 WebUI\\ServerDomains=*
 WebUI\\Port=${QBT_WEBUI_PORT}
 
@@ -1421,6 +1431,10 @@ YAML
       HTTP_CONTROL_SERVER_LOG: "off"
       HTTP_CONTROL_SERVER_AUTH_FILE: /gluetun/auth/config.toml
       GLUETUN_API_KEY: ${GLUETUN_API_KEY}
+      FIREWALL_OUTBOUND_SUBNETS: "${GLUETUN_FIREWALL_OUTBOUND_SUBNETS}"
+      FIREWALL_INPUT_PORTS: "${GLUETUN_FIREWALL_INPUT_PORTS}"
+      HTTPPROXY: "${GLUETUN_HTTPPROXY}"
+      SHADOWSOCKS: "${GLUETUN_SHADOWSOCKS}"
       PUID: ${PUID}
       PGID: ${PGID}
     volumes:
@@ -1500,7 +1514,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null || curl -fsS http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/version >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -1696,6 +1710,7 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
+      SONARR__SERVER__BINDADDRESS: "${SONARR_BIND_ADDRESS}"
     volumes:
       - ${ARR_DOCKER_DIR}/sonarr:/config
       - ${TV_DIR}:/tv
@@ -1705,7 +1720,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${SONARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=${SONARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${SONARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${SONARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1721,6 +1736,7 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
+      RADARR__SERVER__BINDADDRESS: "${RADARR_BIND_ADDRESS}"
     volumes:
       - ${ARR_DOCKER_DIR}/radarr:/config
       - ${MOVIES_DIR}:/movies
@@ -1730,7 +1746,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${RADARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=${RADARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${RADARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${RADARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1746,13 +1762,14 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
+      PROWLARR__SERVER__BINDADDRESS: "${PROWLARR_BIND_ADDRESS}"
     volumes:
       - ${ARR_DOCKER_DIR}/prowlarr:/config
     depends_on:
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${PROWLARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=${PROWLARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${PROWLARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${PROWLARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1768,6 +1785,7 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
+      BAZARR__SERVER__HOST: "${BAZARR_BIND_ADDRESS}"
     volumes:
       - ${ARR_DOCKER_DIR}/bazarr:/config
       - ${TV_DIR}:/tv
@@ -1777,7 +1795,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${BAZARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=${BAZARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${BAZARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${BAZARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1795,7 +1813,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${FLARESOLVERR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=${ARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${FLARESOLVERR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${FLARESOLVERR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
