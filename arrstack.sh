@@ -1434,18 +1434,48 @@ YAML
       test: >
         sh -c '
           AUTH="";
-          if [ -n "$${GLUETUN_API_KEY}" ]; then
+          if [ -n "$${GLUETUN_API_KEY}" ] && printf "%s" "$${GLUETUN_API_KEY}" | grep -Eq "^[A-Za-z0-9+/=]{32,}$"; then
             AUTH="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
+          BASE="http://127.0.0.1:${GLUETUN_CONTROL_PORT}";
+          TMP="/tmp/gluetun-health.$$";
+          CODE="";
+          BODY="";
+          call_api() {
+            PATH_SEG="$1";
+            URL="$${BASE}$${PATH_SEG}";
+            if [ -n "$${AUTH}" ]; then
+              CODE="$(curl -sS --max-time 5 $${AUTH} -o "$${TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+            else
+              CODE="$(curl -sS --max-time 5 -o "$${TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+            fi;
+            if [ "$${CODE}" = "401" ] && [ -n "$${AUTH}" ]; then
+              AUTH="";
+              CODE="$(curl -sS --max-time 5 -o "$${TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+            fi;
+            BODY="$(cat "$${TMP}" 2>/dev/null || true)";
+            rm -f "$${TMP}" 2>/dev/null || true;
+          };
+          call_api "/v1/publicip/ip";
+          if [ "$${CODE}" != "200" ]; then
+            exit 1;
+          fi;
 YAML
     if [ "${VPN_TYPE}" = "openvpn" ]; then
       cat <<'YAML'
-          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
+          call_api "/v1/openvpn/status";
+          if [ "$${CODE}" != "200" ]; then
+            exit 1;
+          fi;
+          printf '%s' "$${BODY}" | grep -qi "running"
 YAML
     else
       cat <<'YAML'
-          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
+          call_api "/v1/wireguard/status";
+          if [ "$${CODE}" != "200" ]; then
+            exit 1;
+          fi;
+          printf '%s' "$${BODY}" | grep -Eqi "connected|running"
 YAML
     fi
     cat <<'YAML'
@@ -1507,11 +1537,50 @@ YAML
         echo "[pf-sync] Starting PF-to-qB port synchroniser (adaptive 15-45s backoff)";
         API_ROOT="http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}";
         AUTH_HEADER="";
-        if [ -n "$${GLUETUN_API_KEY}" ]; then
+        if [ -n "$${GLUETUN_API_KEY}" ] && printf "%s" "$${GLUETUN_API_KEY}" | grep -Eq "^[A-Za-z0-9+/=]{32,}$"; then
           AUTH_HEADER="--user gluetun:$${GLUETUN_API_KEY}";
         fi;
+        CTRL_TMP="/tmp/pf-sync.$$";
+        CTRL_CODE="";
+        CTRL_BODY="";
+        control_get() {
+          PATH_SEG="$1";
+          URL="$${API_ROOT}$${PATH_SEG}";
+          if [ -n "$${AUTH_HEADER}" ]; then
+            CTRL_CODE="$(curl -sS --max-time 5 $${AUTH_HEADER} -o "$${CTRL_TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+          else
+            CTRL_CODE="$(curl -sS --max-time 5 -o "$${CTRL_TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+          fi;
+          if [ "$${CTRL_CODE}" = "401" ] && [ -n "$${AUTH_HEADER}" ]; then
+            AUTH_HEADER="";
+            CTRL_CODE="$(curl -sS --max-time 5 -o "$${CTRL_TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+          fi;
+          CTRL_BODY="$(cat "$${CTRL_TMP}" 2>/dev/null || true)";
+          rm -f "$${CTRL_TMP}" 2>/dev/null || true;
+          case "$${CTRL_CODE}" in
+            2??) return 0 ;;
+          esac;
+          return 1;
+        };
+        control_post() {
+          PATH_SEG="$1";
+          URL="$${API_ROOT}$${PATH_SEG}";
+          if [ -n "$${AUTH_HEADER}" ]; then
+            CTRL_CODE="$(curl -sS --max-time 5 $${AUTH_HEADER} -o /dev/null -w '%{http_code}' -X POST "$${URL}" 2>/dev/null || true)";
+          else
+            CTRL_CODE="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -X POST "$${URL}" 2>/dev/null || true)";
+          fi;
+          if [ "$${CTRL_CODE}" = "401" ] && [ -n "$${AUTH_HEADER}" ]; then
+            AUTH_HEADER="";
+            CTRL_CODE="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -X POST "$${URL}" 2>/dev/null || true)";
+          fi;
+          case "$${CTRL_CODE}" in
+            2??) return 0 ;;
+          esac;
+          return 1;
+        };
         echo "[pf-sync] Waiting for Gluetun health before syncing...";
-        until curl -fsS $${AUTH_HEADER} "$${API_ROOT}/v1/openvpn/status" | grep -qi "running"; do
+        until control_get "/v1/openvpn/status" && printf '%s' "$${CTRL_BODY}" | grep -qi "running"; do
           echo "[pf-sync] Gluetun not ready yet; retrying in 5s";
           sleep 5;
         done;
@@ -1537,7 +1606,7 @@ YAML
           LOGIN_STATE="anon";
         fi;
         echo "[pf-sync] Requesting Proton forwarded port lease from Gluetun...";
-        curl -fsS $${AUTH_HEADER} -X POST "$${API_ROOT}/v1/openvpn/forwardport" >/dev/null 2>&1 || true;
+        control_post "/v1/openvpn/forwardport" || true;
         CUR="";
         STATE="init";
         LAST_SLEEP="";
@@ -1546,7 +1615,8 @@ YAML
         WAIT=$$WAIT_DEFAULT;
         LAST_BAD="";
         while :; do
-          RAW=$$(curl -fsS $${AUTH_HEADER} "$${API_ROOT}/v1/openvpn/portforwarded" || true)
+          control_get "/v1/openvpn/portforwarded" || true
+          RAW="$${CTRL_BODY}"
           RAW=$$(printf '%s' "$$RAW" | tr -d '\r\n')
           case "$$RAW" in
             *:*) P=$${RAW##*:} ;;
@@ -1594,7 +1664,7 @@ YAML
                 fi;
               fi;
             fi;
-            curl -fsS $${AUTH_HEADER} -X POST "$${API_ROOT}/v1/openvpn/forwardport" >/dev/null 2>&1 || true;
+            control_post "/v1/openvpn/forwardport" || true;
             if [ "$$STATE" != "ready" ]; then
               echo "[pf-sync] PF port confirmed at $$P";
             fi;
@@ -1627,10 +1697,33 @@ YAML
       test: >
         sh -c '
           AUTH="";
-          if [ -n "$${GLUETUN_API_KEY}" ]; then
+          if [ -n "$${GLUETUN_API_KEY}" ] && printf "%s" "$${GLUETUN_API_KEY}" | grep -Eq "^[A-Za-z0-9+/=]{32,}$"; then
             AUTH="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl -fsS $$AUTH "http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "(^|:)[1-9][0-9]{3,4}$"
+          BASE="http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}";
+          TMP="/tmp/pf-health.$$";
+          CODE="";
+          BODY="";
+          call_api() {
+            PATH_SEG="$1";
+            URL="$${BASE}$${PATH_SEG}";
+            if [ -n "$${AUTH}" ]; then
+              CODE="$(curl -sS --max-time 5 $${AUTH} -o "$${TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+            else
+              CODE="$(curl -sS --max-time 5 -o "$${TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+            fi;
+            if [ "$${CODE}" = "401" ] && [ -n "$${AUTH}" ]; then
+              AUTH="";
+              CODE="$(curl -sS --max-time 5 -o "$${TMP}" -w '%{http_code}' "$${URL}" 2>/dev/null || true)";
+            fi;
+            BODY="$(cat "$${TMP}" 2>/dev/null || true)";
+            rm -f "$${TMP}" 2>/dev/null || true;
+          };
+          call_api "/v1/openvpn/portforwarded";
+          if [ "$${CODE}" != "200" ]; then
+            exit 1;
+          fi;
+          printf '%s' "$${BODY}" | tr -d '\r\n' | grep -Eq "(^|:)[1-9][0-9]{3,4}$"
         '
       interval: 45s
       timeout: 10s
@@ -1817,16 +1910,51 @@ start_with_checks() {
     local ctrl_host
     ctrl_host="$(control_access_host)"
     local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
-    local -a curl_cmd=(curl -fsS --max-time 5)
-    if [ -n "${GLUETUN_API_KEY:-}" ]; then
-      curl_cmd+=(--user "gluetun:${GLUETUN_API_KEY}")
+    local ctrl_auth_arg=""
+    local ctrl_last_code="" ctrl_last_body=""
+    if is_valid_gluetun_key "${GLUETUN_API_KEY:-}"; then
+      ctrl_auth_arg="--user gluetun:${GLUETUN_API_KEY}"
     fi
+    control_request() {
+      local path="$1" method="${2:-GET}" url response code body
+      url="http://${ctrl_host}:${ctrl_port}${path}"
+      local -a cmd=(curl -sS --max-time 5 -w '\n%{http_code}')
+      if [[ "$method" = POST ]]; then
+        cmd+=(-X POST)
+      fi
+      if [[ -n "$ctrl_auth_arg" ]]; then
+        cmd+=("$ctrl_auth_arg")
+      fi
+      response="$( ${cmd[@]} "$url" 2>/dev/null || true )"
+      code="${response##*$'\n'}"
+      body="${response%$'\n'$code}"
+      if [[ "$code" = 401 && -n "$ctrl_auth_arg" ]]; then
+        ctrl_auth_arg=""
+        cmd=(curl -sS --max-time 5 -w '\n%{http_code}')
+        if [[ "$method" = POST ]]; then
+          cmd+=(-X POST)
+        fi
+        response="$( ${cmd[@]} "$url" 2>/dev/null || true )"
+        code="${response##*$'\n'}"
+        body="${response%$'\n'$code}"
+      fi
+      ctrl_last_code="$code"
+      ctrl_last_body="$body"
+      [[ "$ctrl_last_code" = 2* ]]
+    }
     while [[ $waited -lt ${max_wait} ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
-      IP="$("${curl_cmd[@]}" "http://${ctrl_host}:${ctrl_port}/v1/publicip/ip" 2>/dev/null || true)"
+      if control_request "/v1/publicip/ip"; then
+        IP="$(printf '%s' "$ctrl_last_body" | tr -d '\r\n')"
+      else
+        IP=""
+      fi
       if (( requires_pf )); then
-        pf_raw="$("${curl_cmd[@]}" "http://${ctrl_host}:${ctrl_port}/v1/openvpn/portforwarded" 2>/dev/null || true)"
-        pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
+        if control_request "/v1/openvpn/portforwarded"; then
+          pf_raw="$(printf '%s' "$ctrl_last_body" | tr -d '\r\n')"
+        else
+          pf_raw=""
+        fi
         PF=""
         case "$pf_raw" in
           *:*) PF="${pf_raw##*:}" ;;
@@ -1869,15 +1997,20 @@ start_with_checks() {
   run_or_warn compose_cmd ps
   local ip pf_port="" client_host
   client_host="$(control_access_host)"
-  local -a post_curl=(curl -fsS --max-time 5)
-  if [ -n "${GLUETUN_API_KEY:-}" ]; then
-    post_curl+=(--user "gluetun:${GLUETUN_API_KEY}")
+  ctrl_host="$client_host"
+  ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+  if control_request "/v1/publicip/ip"; then
+    ip="$(printf '%s' "$ctrl_last_body" | tr -d '\r\n')"
+  else
+    ip=""
   fi
-  ip="$("${post_curl[@]}" "http://${client_host}:${GLUETUN_CONTROL_PORT:-8000}/v1/publicip/ip" 2>/dev/null || true)"
   note "Public IP: ${ip}"
   if (( requires_pf )); then
-    pf_raw="$("${post_curl[@]}" "http://${client_host}:${GLUETUN_CONTROL_PORT:-8000}/v1/openvpn/portforwarded" 2>/dev/null || true)"
-    pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
+    if control_request "/v1/openvpn/portforwarded"; then
+      pf_raw="$(printf '%s' "$ctrl_last_body" | tr -d '\r\n')"
+    else
+      pf_raw=""
+    fi
     case "$pf_raw" in
       *:*) pf_port="${pf_raw##*:}" ;;
       *)   pf_port="$pf_raw" ;;
