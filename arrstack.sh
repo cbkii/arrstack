@@ -71,55 +71,38 @@ _stringify_cmd() {
   printf '%s' "${cmd# }"
 }
 
-_redact() {
-  sed -E \
-    -e 's/(GLUETUN_API_KEY=)[^ ]+/\1<REDACTED>/g' \
-    -e 's/(OPENVPN_PASSWORD=)[^ ]+/\1<REDACTED>/g' \
-    -e 's/(OPENVPN_USER=)[^ ]+/\1<REDACTED>/g' \
-    -e 's/(PROTON_PASS=)[^ ]+/\1<REDACTED>/g' \
-    -e 's/(PROTON_USER=)[^ ]+/\1<REDACTED>/g'
+redact_secrets() {
+  sed -E 's/(GLUETUN_API_KEY|OPENVPN_PASSWORD|OPENVPN_USER|QBT_PASS|PROTON_PASS|PROTON_USER)=[^[:space:]]+/\1=<REDACTED>/g'
 }
 
 _log_cmd() {
   local -a argv=("$@")
-  printf '+ %s\n' "$(_stringify_cmd "${argv[@]}")" | _redact >>"$LOG_FILE"
+  printf '+ %s\n' "$(_stringify_cmd "${argv[@]}")" | redact_secrets >>"$LOG_FILE" 2>/dev/null || true
 }
 
-_exec_cmd() {
-  local warn_on_fail=$1
-  shift || true
+_exec_simple() {
   local -a argv=("$@")
   _log_cmd "${argv[@]}"
   if is_dry; then
     return 0
   fi
-
-  local rc
-  if [[ "${argv[0]}" == docker && -e /dev/fd/3 ]]; then
-    if [[ -e /dev/fd/4 ]]; then
-      "${argv[@]}" \
-        > >(tee /dev/fd/3) \
-        2> >(tee /dev/fd/4 >&2)
-    else
-      "${argv[@]}" \
-        > >(tee /dev/fd/3) \
-        2> >(tee /dev/fd/3 >&2)
-    fi
-    rc=$?
-  else
-    "${argv[@]}"
-    rc=$?
-  fi
-
-  if (( warn_on_fail )) && (( rc != 0 )); then
-    warn "Command failed ($rc): $(_stringify_cmd "${argv[@]}")"
-  fi
-  return "$rc"
+  "${argv[@]}"
 }
 
-run() { _exec_cmd 0 "$@"; }
+run() {
+  _exec_simple "$@"
+}
 
-run_or_warn() { _exec_cmd 1 "$@"; }
+run_or_warn() {
+  if ! _exec_simple "$@"; then
+    local rc=$?
+    local cmd_str
+    cmd_str="$(_stringify_cmd "$@")"
+    cmd_str="$(printf '%s\n' "$cmd_str" | redact_secrets)"
+    warn "Command failed (${rc}): ${cmd_str}"
+    return "$rc"
+  fi
+}
 
 require_env() {
   local var=$1
@@ -245,8 +228,8 @@ ts() {
 }
 
 out() {
-  printf "%b\n" "$1" >>"${LOG_FILE}"
-  printf "%b\n" "$1" >&3
+  printf "%b\n" "$1" | redact_secrets >>"${LOG_FILE}" 2>/dev/null || true
+  printf "%b\n" "$1"
 }
 
 step() { out "$(ts) ${C_BLUE}${C_BOLD}✴️ $1${C_RESET}"; }
@@ -388,7 +371,7 @@ read_tty() {
       ans=""
     fi
   else
-    printf "%s" "$prompt" >&3
+    printf "%s" "$prompt" >&2
     if ! IFS= read -r ans; then
       ans=""
     fi
@@ -489,7 +472,7 @@ confirm_or_die() {
   if [ "${ASSUME_YES:-0}" = "1" ]; then
     return 0
   fi
-  printf 'Proceed with installation? [y/N]: ' >&3
+  printf 'Proceed with installation? [y/N]: '
   read -r ans
   case "$ans" in
     y|Y|yes|YES) return 0 ;;
@@ -1892,8 +1875,7 @@ start_with_checks() {
   requires_pf="$([ "${VPN_TYPE}" = "openvpn" ] && echo 1 || echo 0)"
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
-    run_or_warn compose_cmd --profile bootstrap config --services
-    run_or_warn compose_cmd --profile bootstrap config
+    run_or_warn compose_cmd --profile bootstrap config -q >/dev/null
     run_or_warn compose_cmd --profile bootstrap up -d
     run_or_warn compose_cmd ps
     run_or_warn docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
@@ -2055,7 +2037,7 @@ main() {
   pull_images
   start_with_checks
   install_aliases
-  echo >&3
+  echo
   ok "Done. Next steps:"
   note "  • Edit ${PROTON_AUTH_FILE} (username WITHOUT +pmp) if you haven't already."
   note "  • qB Web UI: http://${LOCALHOST_NAME}:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
@@ -2063,7 +2045,6 @@ main() {
 
 cleanup() {
   local status=$?
-  exec 1>&3 2>&4
 
   if [[ "${DEBUG}" == "1" && -n "${TMP_LOG:-}" ]]; then
     if [[ -s "${TMP_LOG}" && -n "${DEST_LOG:-}" ]]; then
@@ -2089,9 +2070,9 @@ cleanup() {
             ln -sfn "${base_name}" "${pointer}" 2>/dev/null || true
           fi
         fi
-        printf 'Installer log saved to %s\n' "${DEST_LOG}" >&3
+        printf 'Installer log saved to %s\n' "${DEST_LOG}"
       else
-        printf 'Failed to save installer log to %s (temporary log at %s)\n' "${DEST_LOG}" "${TMP_LOG}" >&3
+        printf 'Failed to save installer log to %s (temporary log at %s)\n' "${DEST_LOG}" "${TMP_LOG}"
       fi
     else
       if [[ -f "${TMP_LOG}" ]]; then
@@ -2105,9 +2086,7 @@ cleanup() {
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   parse_args "$@"
-  exec 3>&1 4>&2
   setup_logging
-  exec 1>>"${LOG_FILE}" 2>&1
   trap cleanup EXIT
 
   main "$@"
