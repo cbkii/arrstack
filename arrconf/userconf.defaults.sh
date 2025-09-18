@@ -35,10 +35,12 @@ GLUETUN_FIREWALL_OUTBOUND_SUBNETS="${GLUETUN_FIREWALL_OUTBOUND_SUBNETS:-192.168.
 GLUETUN_FIREWALL_INPUT_PORTS="${GLUETUN_FIREWALL_INPUT_PORTS:-8081,8989,7878,9696,6767,8191}"
 GLUETUN_HTTPPROXY="${GLUETUN_HTTPPROXY:-off}"
 GLUETUN_SHADOWSOCKS="${GLUETUN_SHADOWSOCKS:-off}"
-GLUETUN_IMAGE="${GLUETUN_IMAGE:-qmcgaw/gluetun:v3.38.0}"
+VPN_PORT_FORWARDING="${VPN_PORT_FORWARDING:-on}"
+VPN_PORT_FORWARDING_PROVIDER="${VPN_PORT_FORWARDING_PROVIDER:-protonvpn}"
+PORT_FORWARD_ONLY="${PORT_FORWARD_ONLY:-on}"
+GLUETUN_IMAGE="${GLUETUN_IMAGE:-qmcgaw/gluetun:v3.39.1}"
 QBITTORRENT_IMAGE="${QBITTORRENT_IMAGE:-lscr.io/linuxserver/qbittorrent:latest}"
 QBT_DOCKER_MODS="${QBT_DOCKER_MODS:-ghcr.io/gabe565/linuxserver-mod-vuetorrent}"
-PF_SYNC_IMAGE="${PF_SYNC_IMAGE:-curlimages/curl:8.8.0}"
 SONARR_IMAGE="${SONARR_IMAGE:-lscr.io/linuxserver/sonarr:latest}"
 RADARR_IMAGE="${RADARR_IMAGE:-lscr.io/linuxserver/radarr:latest}"
 PROWLARR_IMAGE="${PROWLARR_IMAGE:-lscr.io/linuxserver/prowlarr:latest}"
@@ -83,7 +85,7 @@ SERVER_HOSTNAMES="${SERVER_HOSTNAMES:-}"
 DEFAULT_COUNTRY="${DEFAULT_COUNTRY:-Australia}"
 
 # Service/package lists used by uninstaller
-ALL_CONTAINERS="${ALL_CONTAINERS:-gluetun qbittorrent pf-sync sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr byparr}"
+ALL_CONTAINERS="${ALL_CONTAINERS:-gluetun qbittorrent sonarr radarr prowlarr bazarr flaresolverr jackett transmission lidarr readarr byparr}"
 ALL_NATIVE_SERVICES="${ALL_NATIVE_SERVICES:-sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common byparr}"
 ALL_PACKAGES="${ALL_PACKAGES:-sonarr radarr prowlarr bazarr jackett lidarr readarr qbittorrent transmission-daemon transmission-common byparr}"
 

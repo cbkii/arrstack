@@ -1,7 +1,7 @@
 # arrstack
 
 ### 1) Overview
-- Installs Gluetun (ProtonVPN provider), qBittorrent, Sonarr, Radarr, Prowlarr, Bazarr, and FlareSolverr with Proton port forwarding managed by a pf-sync sidecar in OpenVPN mode.
+- Installs Gluetun (ProtonVPN provider), qBittorrent, Sonarr, Radarr, Prowlarr, Bazarr, and FlareSolverr with Proton port forwarding managed by Gluetun's native API in OpenVPN mode.
 - WireGuard is optional; the stack still launches through Gluetun but Proton port forwarding does not apply in that mode.
 
 ### 2) Prerequisites
@@ -72,10 +72,12 @@ Additional command:
 | `VPN_TYPE` / `DEFAULT_VPN_TYPE` | `openvpn` | Active VPN mode; defaults can be overridden for unattended runs. |
 | `QBT_USER` / `QBT_PASS` | empty | Optional Web UI credentials pre-seeded when hashing dependencies exist. |
 | `GLUETUN_API_KEY` | generated | Control API RBAC secret written to `.env` and `gluetun/auth/config.toml`. |
-| `GLUETUN_IMAGE` | `qmcgaw/gluetun:v3.38.0` | Pinned Gluetun image used for bootstrap key-gen and runtime Compose. |
+| `GLUETUN_IMAGE` | `qmcgaw/gluetun:v3.39.1` | Pinned Gluetun image used for bootstrap key-gen and runtime Compose. |
 | `QBITTORRENT_IMAGE` | `lscr.io/linuxserver/qbittorrent:latest` | qBittorrent container image (shares Gluetun network namespace). |
 | `QBT_DOCKER_MODS` | `ghcr.io/gabe565/linuxserver-mod-vuetorrent` | Vuetorrent mod image applied via LinuxServer's `DOCKER_MODS`. |
-| `PF_SYNC_IMAGE` | `curlimages/curl:8.8.0` | Proton port-forward sync helper (only launched in OpenVPN mode). |
+| `VPN_PORT_FORWARDING` | `on` | Enables Proton port forwarding lease management when Gluetun runs in OpenVPN mode. |
+| `VPN_PORT_FORWARDING_PROVIDER` | `protonvpn` | Provider identifier passed to Gluetun for native Proton forwarding. |
+| `PORT_FORWARD_ONLY` | `on` | Restricts Gluetun to Proton endpoints that support port forwarding. |
 | `SONARR_IMAGE` | `lscr.io/linuxserver/sonarr:latest` | Sonarr container image. |
 | `RADARR_IMAGE` | `lscr.io/linuxserver/radarr:latest` | Radarr container image. |
 | `PROWLARR_IMAGE` | `lscr.io/linuxserver/prowlarr:latest` | Prowlarr container image. |
@@ -126,13 +128,14 @@ The installer creates these paths if they do not exist; adjust overrides in `arr
 2. Verifies/installs dependencies, then stops any existing containers, frees critical ports, halts native services, backs up data, and purges conflicting packages.
 3. Creates directory structure, tightens `arrconf/` permissions, migrates legacy Proton secrets, and ensures Proton auth files exist with `600` mode.
 4. Handles Gluetun API key reuse or rotation, writes RBAC config, and generates the `.env` plus Proton credentials/WireGuard variables.
-5. Seeds qBittorrent configuration and optional credentials, verifies the stored WebUI hash aligns with `QBT_USER/QBT_PASS` for pf-sync, writes `docker-compose.yml`, pulls images, and bootstraps Gluetun with repeated health polling before launching the full stack and helper aliases.
+5. Seeds qBittorrent configuration and optional credentials, verifies WebUI credentials for API automation, writes `docker-compose.yml`, pulls images, and bootstraps Gluetun with repeated health polling before launching the full stack, running LAN reachability and native port-forwarding validation, and installing helper aliases.
 
 ### 7) Runtime model
-- Docker Compose profiles: `bootstrap` starts only Gluetun; `prod` adds qBittorrent, the Proton PF synchroniser (OpenVPN only), and the *arr services.
-- Health gating: Gluetun must expose a healthy public IP (and OpenVPN PF when applicable) before `prod` services launch; qBittorrent’s health check polls `/api/v2/app/version` and each *arr container responds on its HTTP port.
-- The `pf-sync` sidecar watches Gluetun’s `/v1/openvpn/portforwarded` endpoint, requests a lease once Gluetun is healthy, and pushes the value into qBittorrent via `/api/v2/app/setPreferences` (logging if WebUI authentication fails) while forcing UPnP off so the Proton assignment always wins.
+- Docker Compose profiles: `bootstrap` starts only Gluetun; `prod` adds qBittorrent and the *arr services once the VPN layer is healthy.
+- Health gating: Gluetun must expose a healthy public IP (and a forwarded port in OpenVPN mode) before `prod` services launch; qBittorrent’s health check polls `/api/v2/app/version` and each *arr container responds on its HTTP port.
+- Gluetun’s native `VPN_PORT_FORWARDING_UP_COMMAND` now updates qBittorrent directly via `/api/v2/app/setPreferences`, retrying on transient failures and disabling UPnP so the Proton assignment always wins.
 - Proton issues a fresh forwarded port every OpenVPN session. Expect qBittorrent’s listening port to change after reconnects or restarts.
+- After the stack settles, the installer runs LAN reachability checks for each service and queries the Gluetun control API to confirm native port forwarding is active.
 
 ### 8) Daily operations
 - The installer copies `.aliasarr` to `${ARR_STACK_DIR}/.aliasarr` and appends `source ${ARR_STACK_DIR}/.aliasarr` to `~/.zshrc`. Source the file from other shells (e.g., `source ${ARR_STACK_DIR}/.aliasarr`) to load the helpers.
@@ -143,8 +146,8 @@ The installer creates these paths if they do not exist; adjust overrides in `arr
 | `pvpn status` | Show Gluetun status, public IP, and the current forwarded port. |
 | `pvpn connect` / `pvpn reconnect` | Start or restart Gluetun + qBittorrent. |
 | `pvpn mode openvpn` / `pvpn mode wireguard` | Switch VPN mode (OpenVPN keeps Proton PF support). |
-| `pvpn port` | Print the forwarded port only. |
-| `qbtportsync` | Manually push the forwarded port into qBittorrent via its API (useful if PF drifts; replaces the legacy `pvpn portsync`). |
+| `pvpn port` | Print the forwarded port via the Gluetun control API. |
+| `qbtportsync` | Manually push the forwarded port into qBittorrent via its API (useful if native updates fall behind). |
 | `arrvpncountry` (`arr_vpn_country`) | Request a Proton exit country using the Gluetun control API, falling back to priority order. |
 | `arrvpnfastest [limit]` (`arr_vpn_fastest`) | Probe preferred countries and switch to the fastest responsive endpoint. |
 
@@ -207,15 +210,16 @@ curl -fsS http://${LOCALHOST_ADDR:-127.0.0.1}:${QBT_HTTP_PORT_HOST}/api/v2/app/p
 | Ports already in use | Free the ports listed in the prerequisites; installer will try to kill conflicting listeners but may require manual cleanup. |
 | LAN_IP reset to `0.0.0.0` | Update `LAN_IP` in `arrconf/userconf.sh` to a host-local RFC1918 address and rerun. |
 | Need a new Gluetun API key | Run `./arrstack.sh --rotate-apikey --debug` (optional) to regenerate and persist a fresh key. |
-| Proton PF mismatch (OpenVPN) | Compare the Gluetun and qBittorrent port values above; run `qbtportsync` or restart `pf-sync`. |
-| pf-sync cannot authenticate to qBittorrent | Ensure `QBT_USER`/`QBT_PASS` in `arrconf/userconf.sh` match the WebUI credentials (or leave both unset to rely on local-auth bypass) and rerun the installer to refresh the hash. |
+| Proton PF mismatch (OpenVPN) | Compare the Gluetun and qBittorrent port values above; run `qbtportsync` or restart `qbittorrent` to reapply the forwarded port. |
+| Services unreachable from other LAN devices | Rerun the installer (or source `.aliasarr`) and ensure `validate_lan_access` reports success; confirm `LAN_IP` and Gluetun firewall variables permit your subnet. |
+| Native PF status unclear | Use `pvpn status`/`pvpn port` or rerun the installer to trigger `validate_native_port_forwarding`; ensure the Gluetun control API is reachable from the host running the installer. |
 
 ### 12) Limits & upgrades
-- Proton port forwarding only works in OpenVPN mode; WireGuard runs without PF or the `pf-sync` helper.
-- Expect Proton to rotate forwarded ports each reconnection; allow `pf-sync` (or `qbtportsync`) to keep qBittorrent aligned.
+- Proton port forwarding only works in OpenVPN mode; WireGuard still shares the Gluetun namespace but runs without a forwarded port.
+- Expect Proton to rotate forwarded ports each reconnection; Gluetun’s native up-command handles updates automatically, with `qbtportsync` available as a manual fallback.
 - FlareSolverr can spike CPU/RAM while solving challenges—budget headroom or scale the container accordingly.
 - DNS-over-TLS (`DOT`) ships disabled for stability; set `DOT="on"` in `arrconf/userconf.sh` once you validate Proton’s DoT endpoints.
-- Gluetun is pinned to `qmcgaw/gluetun:v3.38.0`; review upstream release notes before moving to a newer tag.
+- Gluetun is pinned to `qmcgaw/gluetun:v3.39.1`; review upstream release notes before moving to a newer tag.
 
 ### 13) Uninstall / clean up
 - Stop the stack but keep data: `cd ${ARR_STACK_DIR} && docker compose down --remove-orphans` (Compose file and `.env` live here).

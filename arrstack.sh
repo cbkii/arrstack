@@ -146,16 +146,15 @@ export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEM
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
 export DEFAULT_VPN_TYPE SERVER_COUNTRIES SERVER_HOSTNAMES DEFAULT_COUNTRY GLUETUN_API_KEY
 
-: "${GLUETUN_IMAGE:=qmcgaw/gluetun:v3.38.0}"
+: "${GLUETUN_IMAGE:=qmcgaw/gluetun:v3.39.1}"
 : "${QBITTORRENT_IMAGE:=lscr.io/linuxserver/qbittorrent:latest}"
 : "${QBT_DOCKER_MODS:=ghcr.io/gabe565/linuxserver-mod-vuetorrent}"
-: "${PF_SYNC_IMAGE:=curlimages/curl:8.8.0}"
 : "${SONARR_IMAGE:=lscr.io/linuxserver/sonarr:latest}"
 : "${RADARR_IMAGE:=lscr.io/linuxserver/radarr:latest}"
 : "${PROWLARR_IMAGE:=lscr.io/linuxserver/prowlarr:latest}"
 : "${BAZARR_IMAGE:=lscr.io/linuxserver/bazarr:latest}"
 : "${FLARESOLVERR_IMAGE:=ghcr.io/flaresolverr/flaresolverr:latest}"
-export GLUETUN_IMAGE QBITTORRENT_IMAGE QBT_DOCKER_MODS PF_SYNC_IMAGE SONARR_IMAGE RADARR_IMAGE PROWLARR_IMAGE BAZARR_IMAGE FLARESOLVERR_IMAGE
+export GLUETUN_IMAGE QBITTORRENT_IMAGE QBT_DOCKER_MODS SONARR_IMAGE RADARR_IMAGE PROWLARR_IMAGE BAZARR_IMAGE FLARESOLVERR_IMAGE
 
 # non-interactive mode & key-rotation control
 : "${ARR_NONINTERACTIVE:=0}"
@@ -967,6 +966,10 @@ write_env() {
   step "11/15 Writing stack .env"
   local envf="${ARR_ENV_FILE}"
   ensure_dir "${ARR_STACK_DIR}"
+  GLUETUN_IMAGE="${GLUETUN_IMAGE:-qmcgaw/gluetun:v3.39.1}"
+  VPN_PORT_FORWARDING="${VPN_PORT_FORWARDING:-on}"
+  VPN_PORT_FORWARDING_PROVIDER="${VPN_PORT_FORWARDING_PROVIDER:-protonvpn}"
+  PORT_FORWARD_ONLY="${PORT_FORWARD_ONLY:-on}"
   local PU="" PP="" CN="${SERVER_COUNTRIES}" SHN="${SERVER_HOSTNAMES:-}"
   CN="${CN%\"}"
   CN="${CN#\"}"
@@ -1024,7 +1027,6 @@ GLUETUN_API_KEY=${GLUETUN_API_KEY}
 GLUETUN_IMAGE=${GLUETUN_IMAGE}
 QBITTORRENT_IMAGE=${QBITTORRENT_IMAGE}
 QBT_DOCKER_MODS=${QBT_DOCKER_MODS}
-PF_SYNC_IMAGE=${PF_SYNC_IMAGE}
 SONARR_IMAGE=${SONARR_IMAGE}
 RADARR_IMAGE=${RADARR_IMAGE}
 PROWLARR_IMAGE=${PROWLARR_IMAGE}
@@ -1043,6 +1045,9 @@ GLUETUN_FIREWALL_OUTBOUND_SUBNETS=${GLUETUN_FIREWALL_OUTBOUND_SUBNETS}
 GLUETUN_FIREWALL_INPUT_PORTS=${GLUETUN_FIREWALL_INPUT_PORTS}
 GLUETUN_HTTPPROXY=${GLUETUN_HTTPPROXY}
 GLUETUN_SHADOWSOCKS=${GLUETUN_SHADOWSOCKS}
+VPN_PORT_FORWARDING=${VPN_PORT_FORWARDING}
+VPN_PORT_FORWARDING_PROVIDER=${VPN_PORT_FORWARDING_PROVIDER}
+PORT_FORWARD_ONLY=${PORT_FORWARD_ONLY}
 QBT_USER=${QBT_USER}
 QBT_PASS=${QBT_PASS}
 LAN_IP=${LAN_IP}
@@ -1179,7 +1184,7 @@ WebUI\\AlternativeUIEnabled=false
 WebUI\\ServerDomains=*
 WebUI\\Port=${QBT_WEBUI_PORT}
 
-# --- Avoid conflicts: pf-sync sidecar manages the listen port ---
+# --- Avoid conflicts: native Gluetun port forwarding manages the listen port ---
 Connection\\UPnP=false
 Connection\\UseUPnP=false
 Connection\\UseNAT-PMP=false
@@ -1276,80 +1281,6 @@ seed_qbt_credentials_if_requested() {
   fi
 }
 
-verify_qbt_credentials_for_pf_sync() {
-  local cfg stored_user hash_line payload salt_b64 dk_b64 salt_hex derived
-
-  cfg="$(ensure_qbt_conf_base)" || return
-
-  if [ -z "${QBT_USER:-}" ] && [ -z "${QBT_PASS:-}" ]; then
-    note "QBT_USER/QBT_PASS not set; pf-sync will rely on qBittorrent's local-auth bypass."
-    return
-  fi
-
-  if [ -z "${QBT_USER:-}" ] || [ -z "${QBT_PASS:-}" ]; then
-    warn "Both QBT_USER and QBT_PASS must be populated for pf-sync to log in. Update arrconf/userconf.sh or reset the qB WebUI password."
-    return
-  fi
-
-  stored_user="$(grep -E '^WebUI\\\\Username=' "${cfg}" | head -n1 | cut -d= -f2- || true)"
-  if [ -n "${stored_user}" ] && [ "${stored_user}" != "${QBT_USER}" ]; then
-    warn "QBT_USER ('${QBT_USER}') does not match qBittorrent WebUI username ('${stored_user}'); pf-sync login will fail until they are aligned."
-  fi
-
-  hash_line="$(grep -E '^WebUI\\\\Password_PBKDF2=' "${cfg}" | tail -n1 || true)"
-  if [ -z "${hash_line}" ]; then
-    warn "Could not find a WebUI password hash in ${cfg}; pf-sync credential verification skipped."
-    return
-  fi
-
-  if ! check_hash_deps >/dev/null 2>&1; then
-    warn "Skipping qBittorrent credential verification (OpenSSL 3 PBKDF2 helpers unavailable)."
-    return
-  fi
-
-  payload="$(printf '%s\n' "${hash_line}" | sed -E 's/^WebUI\\\\Password_PBKDF2="@ByteArray\(([^"]+)\)"$/\1/' || true)"
-  if [ -z "${payload}" ]; then
-    warn "Unable to parse qBittorrent password hash from ${cfg}; pf-sync login may fail."
-    return
-  fi
-
-  salt_b64="${payload%%:*}"
-  dk_b64="${payload##*:}"
-  if [ -z "${salt_b64}" ] || [ -z "${dk_b64}" ]; then
-    warn "Parsed qBittorrent password hash was incomplete; pf-sync login may fail."
-    return
-  fi
-
-  if command -v xxd >/dev/null 2>&1; then
-    salt_hex="$(printf '%s' "${salt_b64}" | base64 -d 2>/dev/null | xxd -p -c 256 | tr -d '\n' || true)"
-  else
-    salt_hex="$(printf '%s' "${salt_b64}" | base64 -d 2>/dev/null | od -An -tx1 | tr -d ' \n' || true)"
-  fi
-
-  if [ -z "${salt_hex}" ]; then
-    warn "Failed to decode qBittorrent password salt; pf-sync login verification skipped."
-    return
-  fi
-
-  derived="$(openssl kdf -binary -keylen 64 \
-    -kdfopt digest:SHA512 \
-    -kdfopt pass:"${QBT_PASS}" \
-    -kdfopt hexsalt:"${salt_hex}" \
-    -kdfopt iter:100000 \
-    PBKDF2 | base64 | tr -d '\n' || true)"
-
-  if [ -z "${derived}" ]; then
-    warn "Failed to derive PBKDF2 hash for qBittorrent credentials; pf-sync login verification skipped."
-    return
-  fi
-
-  if [ "${derived}" != "${dk_b64}" ]; then
-    warn "QBT_PASS does not match the password stored in ${cfg}; pf-sync will be unable to authenticate until they match."
-  else
-    ok "Verified qBittorrent WebUI credentials for pf-sync login."
-  fi
-}
-
 print_qbt_temp_password_if_any() {
   if [ -z "${QBT_USER:-}" ] || [ -z "${QBT_PASS:-}" ]; then
     sleep 3
@@ -1372,7 +1303,7 @@ write_compose() {
     cat <<'YAML'
 services:
   gluetun:
-    image: ${GLUETUN_IMAGE}
+    image: ${GLUETUN_IMAGE:-qmcgaw/gluetun:v3.39.1}
     container_name: gluetun
     profiles: ["bootstrap","prod"]
     cap_add: ["NET_ADMIN"]
@@ -1394,9 +1325,15 @@ YAML
 YAML
     else
       cat <<'YAML'
-      VPN_PORT_FORWARDING: "on"
-      VPN_PORT_FORWARDING_PROVIDER: protonvpn
-      PORT_FORWARD_ONLY: "on"
+      VPN_PORT_FORWARDING: "${VPN_PORT_FORWARDING}"
+      VPN_PORT_FORWARDING_PROVIDER: "${VPN_PORT_FORWARDING_PROVIDER}"
+      PORT_FORWARD_ONLY: "${PORT_FORWARD_ONLY}"
+      VPN_PORT_FORWARDING_UP_COMMAND: >-
+        /bin/sh -c 'sleep 5 &&
+        curl -fsS --retry 3 --max-time 10 -X POST
+        "http://127.0.0.1:${QBT_WEBUI_PORT}/api/v2/app/setPreferences"
+        --data "json={\"listen_port\":{{FORWARDED_PORT}},\"upnp\":false}" ||
+        echo "[native-pf] Failed to update qBittorrent port"'
 YAML
     fi
     cat <<'YAML'
@@ -1415,7 +1352,7 @@ YAML
       HTTP_CONTROL_SERVER_AUTH_FILE: /gluetun/auth/config.toml
       GLUETUN_API_KEY: ${GLUETUN_API_KEY}
       FIREWALL_OUTBOUND_SUBNETS: "${GLUETUN_FIREWALL_OUTBOUND_SUBNETS}"
-      FIREWALL_INPUT_PORTS: "${GLUETUN_FIREWALL_INPUT_PORTS}"
+      FIREWALL_VPN_INPUT_PORTS: "${GLUETUN_FIREWALL_INPUT_PORTS}"
       HTTPPROXY: "${GLUETUN_HTTPPROXY}"
       SHADOWSOCKS: "${GLUETUN_SHADOWSOCKS}"
       PUID: ${PUID}
@@ -1434,49 +1371,31 @@ YAML
     healthcheck:
       test: >
         sh -c '
-          AUTH="";
+          AUTH_ARGS="";
           if [ -n "$${GLUETUN_API_KEY}" ]; then
-            AUTH="--user gluetun:$${GLUETUN_API_KEY}";
+            AUTH_ARGS="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl_with_fallback() {
-            URL="$1";
-            CODE="000";
-            if [ -n "$$AUTH" ]; then
-              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 $$AUTH "$$URL" || echo 000);
-              if [ "$$CODE" = "401" ]; then
-                AUTH="";
-                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
-              fi;
-            else
-              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
-            fi;
-            if [ "$$CODE" != "200" ]; then
-              return 1;
-            fi;
-            if [ -n "$$AUTH" ]; then
-              curl -fsS --max-time 5 $$AUTH "$$URL";
-            else
-              curl -fsS --max-time 5 "$$URL";
-            fi;
-          };
-          curl_with_fallback "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
-YAML
-    if [ "${VPN_TYPE}" = "openvpn" ]; then
-      cat <<'YAML'
-          curl_with_fallback "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
-YAML
-    else
-      cat <<'YAML'
-          curl_with_fallback "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
-YAML
-    fi
-    cat <<'YAML'
+          STATUS_ENDPOINT="/v1/openvpn/status";
+          STATUS_PATTERN="running";
+          if [ "$${VPN_TYPE}" = "wireguard" ]; then
+            STATUS_ENDPOINT="/v1/wireguard/status";
+            STATUS_PATTERN="connected\\|running";
+          fi;
+          curl -fsS --max-time 5 $$AUTH_ARGS "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
+          curl -fsS --max-time 5 $$AUTH_ARGS "http://127.0.0.1:${GLUETUN_CONTROL_PORT}$$STATUS_ENDPOINT" | grep -Eqi "$$STATUS_PATTERN"
         '
-      interval: 10s
-      timeout: 5s
+      interval: 15s
+      timeout: 10s
       retries: 6
-      start_period: 180s
+      start_period: 300s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
 
   qbittorrent:
     image: ${QBITTORRENT_IMAGE}
@@ -1503,185 +1422,15 @@ YAML
       retries: 6
       start_period: 90s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.75'
+        reservations:
+          memory: 256M
 
 YAML
-    if [ "${VPN_TYPE}" = "openvpn" ]; then
-      cat <<'YAML'
-  pf-sync:
-    image: ${PF_SYNC_IMAGE}
-    container_name: pf-sync
-    profiles: ["prod"]
-    network_mode: "service:gluetun"
-    environment:
-      GLUETUN_CONTROL_HOST: ${GLUETUN_CONTROL_HOST}
-      GLUETUN_CONTROL_PORT: ${GLUETUN_CONTROL_PORT}
-      GLUETUN_API_KEY: ${GLUETUN_API_KEY}
-      QBT_WEBUI_PORT: ${QBT_WEBUI_PORT}
-      QBT_USERNAME: ${QBT_USER:-}
-      QBT_PASSWORD: ${QBT_PASS:-}
-    depends_on:
-      gluetun:
-        condition: service_healthy
-      qbittorrent:
-        condition: service_healthy
-    command: >
-      sh -c '
-        echo "[pf-sync] Starting PF-to-qB port synchroniser (adaptive 15-45s backoff)";
-        API_ROOT="http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}";
-        AUTH_HEADER="";
-        if [ -n "$${GLUETUN_API_KEY}" ]; then
-          AUTH_HEADER="--user gluetun:$${GLUETUN_API_KEY}";
-        fi;
-        echo "[pf-sync] Waiting for Gluetun health before syncing...";
-        until curl -fsS $${AUTH_HEADER} "$${API_ROOT}/v1/openvpn/status" | grep -qi "running"; do
-          echo "[pf-sync] Gluetun not ready yet; retrying in 5s";
-          sleep 5;
-        done;
-        LOGIN_STATE="";
-        echo "[pf-sync] Waiting for qBittorrent API...";
-        until curl -fsS "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/version" >/dev/null 2>&1; do
-          echo "[pf-sync] qBittorrent not ready yet; retrying in 5s";
-          sleep 5;
-        done;
-        if [ -n "$${QBT_USERNAME}" ] && [ -n "$${QBT_PASSWORD}" ]; then
-          echo "[pf-sync] Validating supplied qBittorrent credentials...";
-          if curl -fsS -c /tmp/qbt.cookie "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/auth/login" \
-            --data "username=$${QBT_USERNAME}&password=$${QBT_PASSWORD}" >/dev/null 2>&1; then
-            echo "[pf-sync] qBittorrent login succeeded; authenticated API ready.";
-            LOGIN_STATE="auth-ok";
-          else
-            echo "[pf-sync] WARNING: Initial qBittorrent login failed; pf-sync will keep retrying. Check QBT_USER/QBT_PASS or reset the WebUI password." >&2;
-            LOGIN_STATE="auth-fail";
-          fi;
-          rm -f /tmp/qbt.cookie 2>/dev/null || true;
-        else
-          echo "[pf-sync] No WebUI credentials provided; relying on local authentication bypass.";
-          LOGIN_STATE="anon";
-        fi;
-        echo "[pf-sync] Requesting Proton forwarded port lease from Gluetun...";
-        curl -fsS $${AUTH_HEADER} -X POST "$${API_ROOT}/v1/openvpn/forwardport" >/dev/null 2>&1 || true;
-        CUR="";
-        STATE="init";
-        LAST_SLEEP="";
-        WAIT_DEFAULT=45;
-        WAIT_MIN=15;
-        WAIT=$$WAIT_DEFAULT;
-        LAST_BAD="";
-        while :; do
-          RAW=$$(curl -fsS $${AUTH_HEADER} "$${API_ROOT}/v1/openvpn/portforwarded" || true)
-          RAW=$$(printf '%s' "$$RAW" | tr -d '\r\n')
-          case "$$RAW" in
-            *:*) P=$${RAW##*:} ;;
-            *)   P="$$RAW" ;;
-          esac
-          if printf '%s' "$$P" | grep -Eq "^[1-9][0-9]{3,4}$"; then
-            if [ "$$P" != "$$CUR" ]; then
-              echo "[pf-sync] Applying Proton PF port $$P to qBittorrent";
-              if [ -n "$${QBT_USERNAME}" ] && [ -n "$${QBT_PASSWORD}" ]; then
-                COOKIE=/tmp/qbt.cookie;
-                if curl -fsS -c "$$COOKIE" "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/auth/login" \
-                  --data "username=$${QBT_USERNAME}&password=$${QBT_PASSWORD}" >/dev/null 2>&1; then
-                  if curl -fsS -b "$$COOKIE" \
-                    "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
-                    --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1; then
-                    CUR="$$P";
-                    if [ "$$LOGIN_STATE" != "auth-ok" ]; then
-                      echo "[pf-sync] Authenticated qBittorrent API access restored.";
-                    fi;
-                    LOGIN_STATE="auth-ok";
-                  else
-                    if [ "$$LOGIN_STATE" != "auth-set-fail" ]; then
-                      echo "[pf-sync] ERROR: Authenticated port update request failed; inspect qBittorrent logs." >&2;
-                    fi;
-                    LOGIN_STATE="auth-set-fail";
-                  fi;
-                else
-                  if [ "$$LOGIN_STATE" != "auth-fail" ]; then
-                    echo "[pf-sync] ERROR: qBittorrent login failed for user '$${QBT_USERNAME}'. Verify QBT_USER/QBT_PASS or reset the WebUI password." >&2;
-                  fi;
-                  LOGIN_STATE="auth-fail";
-                fi;
-                rm -f "$$COOKIE" 2>/dev/null || true;
-              else
-                if curl -fsS -X POST \
-                  "http://127.0.0.1:$${QBT_WEBUI_PORT}/api/v2/app/setPreferences" \
-                  --data "json={\\"listen_port\\":$${P},\\"upnp\\":false}" >/dev/null 2>&1; then
-                  CUR="$$P";
-                  LOGIN_STATE="anon";
-                else
-                  if [ "$$LOGIN_STATE" != "anon-fail" ]; then
-                    echo "[pf-sync] ERROR: Failed to update qBittorrent listen port without credentials; enable the local auth bypass or set QBT_USER/QBT_PASS." >&2;
-                  fi;
-                  LOGIN_STATE="anon-fail";
-                fi;
-              fi;
-            fi;
-            curl -fsS $${AUTH_HEADER} -X POST "$${API_ROOT}/v1/openvpn/forwardport" >/dev/null 2>&1 || true;
-            if [ "$$STATE" != "ready" ]; then
-              echo "[pf-sync] PF port confirmed at $$P";
-            fi;
-            STATE="ready";
-            LAST_BAD="";
-            WAIT=$$WAIT_DEFAULT;
-          else
-            if [ "$$STATE" != "waiting" ] || [ "$$LAST_BAD" != "$$RAW" ]; then
-              echo "[pf-sync] PF port not available yet (value='$$RAW')";
-            fi;
-            PREV_STATE=$$STATE;
-            STATE="waiting";
-            LAST_BAD="$$RAW";
-            if [ "$$PREV_STATE" != "waiting" ]; then
-              WAIT=$$WAIT_MIN;
-            elif [ "$$WAIT" -lt "$$WAIT_DEFAULT" ]; then
-              WAIT=$$((WAIT * 2));
-              if [ "$$WAIT" -gt "$$WAIT_DEFAULT" ]; then
-                WAIT=$$WAIT_DEFAULT;
-              fi;
-            fi;
-          fi;
-          if [ "$$LAST_SLEEP" != "$${WAIT}:$${STATE}" ]; then
-            echo "[pf-sync] Sleeping $${WAIT}s before next check";
-            LAST_SLEEP="$${WAIT}:$${STATE}";
-          fi;
-          sleep "$$WAIT";
-        done'
-    healthcheck:
-      test: >
-        sh -c '
-          AUTH="";
-          if [ -n "$${GLUETUN_API_KEY}" ]; then
-            AUTH="--user gluetun:$${GLUETUN_API_KEY}";
-          fi;
-          curl_with_fallback() {
-            URL="$1";
-            CODE="000";
-            if [ -n "$$AUTH" ]; then
-              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 $$AUTH "$$URL" || echo 000);
-              if [ "$$CODE" = "401" ]; then
-                AUTH="";
-                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
-              fi;
-            else
-              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
-            fi;
-            if [ "$$CODE" != "200" ]; then
-              return 1;
-            fi;
-            if [ -n "$$AUTH" ]; then
-              curl -fsS --max-time 5 $$AUTH "$$URL";
-            else
-              curl -fsS --max-time 5 "$$URL";
-            fi;
-          };
-          curl_with_fallback "http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "(^|:)[1-9][0-9]{3,4}$"
-        '
-      interval: 45s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
-    restart: unless-stopped
-YAML
-    fi
     cat <<'YAML'
 
   sonarr:
@@ -1693,7 +1442,7 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
-      SONARR__SERVER__BINDADDRESS: "${SONARR_BIND_ADDRESS}"
+      SONARR__SERVER__BINDADDRESS: "0.0.0.0"
     volumes:
       - ${ARR_DOCKER_DIR}/sonarr:/config
       - ${TV_DIR}:/tv
@@ -1703,7 +1452,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "ADDR=${SONARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${SONARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${SONARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=0.0.0.0; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${SONARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${SONARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1719,7 +1468,7 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
-      RADARR__SERVER__BINDADDRESS: "${RADARR_BIND_ADDRESS}"
+      RADARR__SERVER__BINDADDRESS: "0.0.0.0"
     volumes:
       - ${ARR_DOCKER_DIR}/radarr:/config
       - ${MOVIES_DIR}:/movies
@@ -1729,7 +1478,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "ADDR=${RADARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${RADARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${RADARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=0.0.0.0; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${RADARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${RADARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1745,14 +1494,14 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
-      PROWLARR__SERVER__BINDADDRESS: "${PROWLARR_BIND_ADDRESS}"
+      PROWLARR__SERVER__BINDADDRESS: "0.0.0.0"
     volumes:
       - ${ARR_DOCKER_DIR}/prowlarr:/config
     depends_on:
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "ADDR=${PROWLARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${PROWLARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${PROWLARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=0.0.0.0; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${PROWLARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${PROWLARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1768,7 +1517,7 @@ YAML
       PUID: ${PUID}
       PGID: ${PGID}
       TZ: ${TIMEZONE}
-      BAZARR__SERVER__HOST: "${BAZARR_BIND_ADDRESS}"
+      BAZARR__SERVER__HOST: "0.0.0.0"
     volumes:
       - ${ARR_DOCKER_DIR}/bazarr:/config
       - ${TV_DIR}:/tv
@@ -1778,7 +1527,7 @@ YAML
       gluetun:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "ADDR=${BAZARR_BIND_ADDRESS:-0.0.0.0}; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${BAZARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${BAZARR_PORT} >/dev/null"]
+      test: ["CMD-SHELL", "ADDR=0.0.0.0; if [ \"$ADDR\" = \"0.0.0.0\" ] || [ \"$ADDR\" = \"*\" ]; then ADDR=$(hostname -i 2>/dev/null | awk '{print $1}'); fi; if [ -z \"$ADDR\" ]; then ADDR=127.0.0.1; fi; curl -fsS http://$ADDR:${BAZARR_PORT} >/dev/null || curl -fsS http://127.0.0.1:${BAZARR_PORT} >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1901,6 +1650,54 @@ wait_for_port_forwarding() {
   return 1
 }
 
+validate_lan_access() {
+  note "Validating LAN access..."
+  local failed=0
+  local services="8989:Sonarr 7878:Radarr 9696:Prowlarr 6767:Bazarr 8191:FlareSolverr 8081:qBittorrent"
+
+  for service in $services; do
+    local port="${service%%:*}" name="${service#*:}"
+    if timeout 5 curl -fsS "http://${LAN_IP}:${port}" >/dev/null 2>&1; then
+      ok "$name accessible on port $port"
+    else
+      warn "$name NOT accessible on port $port"
+      failed=1
+    fi
+  done
+
+  if [[ $failed -eq 1 ]]; then
+    warn "Some services failed LAN access test. Check firewall rules and service binding."
+    echo "Troubleshooting: docker exec gluetun ss -tulpn | grep -E ':(8989|7878|9696|6767|8191|8081)'" >>"$LOG_FILE"
+  fi
+}
+
+validate_native_port_forwarding() {
+  [[ "${VPN_TYPE}" != "openvpn" ]] && return 0
+
+  note "Validating native port forwarding..."
+  local ctrl_host ctrl_port pf_port
+  ctrl_host="$(control_access_host)"
+  ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+
+  local -a curl_args=(--max-time 10)
+  if [[ -n "${GLUETUN_API_KEY:-}" ]]; then
+    curl_args+=(-u "gluetun:${GLUETUN_API_KEY}")
+  fi
+
+  if pf_port=$(curl -fsS "${curl_args[@]}" "http://${ctrl_host}:${ctrl_port}/v1/openvpn/portforwarded" 2>/dev/null); then
+    case "$pf_port" in
+      *:*) pf_port="${pf_port##*:}" ;;
+    esac
+    if printf '%s' "$pf_port" | grep -Eq '^[1-9][0-9]{3,4}$'; then
+      ok "Native port forwarding active: $pf_port"
+    else
+      warn "Port forwarding response unclear: $pf_port"
+    fi
+  else
+    warn "Could not verify native port forwarding status"
+  fi
+}
+
 start_with_checks() {
   step "14/15 Starting stack with phased bootstrap"
   validate_creds_or_die
@@ -1950,9 +1747,11 @@ start_with_checks() {
 
   if [[ "${VPN_TYPE}" == "openvpn" ]]; then
     note "Phase 5: Waiting for port forwarding..."
-    compose_cmd up -d pf-sync || warn "Failed to start pf-sync"
     wait_for_port_forwarding 180 || warn "Port forwarding not ready"
   fi
+
+  validate_lan_access
+  validate_native_port_forwarding
 }
 
 install_aliases() {
@@ -2009,7 +1808,6 @@ main() {
   seed_wireguard_from_conf
   ensure_qbt_conf
   seed_qbt_credentials_if_requested
-  verify_qbt_credentials_for_pf_sync
   write_compose
   pull_images
   start_with_checks
