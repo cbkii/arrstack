@@ -52,10 +52,15 @@ Additional command:
 | `ARRCONF_DIR` | `${REPO_ROOT}/arrconf` | Secrets and overrides directory; enforced `700/600` permissions. |
 | `ARR_ENV_FILE` | `${ARR_STACK_DIR}/.env` | Generated Compose environment file consumed by the installer and docker compose. |
 | `LAN_IP` | `192.168.1.11` | Host bind for all service ports; `0.0.0.0` exposes every interface. |
+| `ARR_BIND_ADDRESS` | `0.0.0.0` | Default interface binding for *arr services within the Gluetun network namespace. |
+| `SONARR_BIND_ADDRESS`, `RADARR_BIND_ADDRESS`, `PROWLARR_BIND_ADDRESS`, `BAZARR_BIND_ADDRESS` | `ARR_BIND_ADDRESS` | Per-service overrides for binding when the shared namespace requires LAN exposure. |
 | `LOCALHOST_ADDR` / `LOCALHOST_NAME` | `127.0.0.1` / `localhost` | Default client host for Gluetun API and UI URLs. |
 | `GLUETUN_CONTROL_PORT` | `8000` | Gluetun control API port; paired with `${GLUETUN_CONTROL_BIND_HOST}` and RBAC. |
 | `GLUETUN_CONTROL_BIND_HOST` | `${LOCALHOST_ADDR}` | Host interface exposed for the control API (defaults to loopback). |
 | `GLUETUN_CONTROL_LISTEN_ADDR` | `127.0.0.1` | Container-side bind address for the control server. |
+| `GLUETUN_FIREWALL_OUTBOUND_SUBNETS` | `192.168.1.0/24` | LAN subnets permitted for outbound access through Gluetun's firewall. |
+| `GLUETUN_FIREWALL_INPUT_PORTS` | `8081,8989,7878,9696,6767,8191` | Ports opened in Gluetun's firewall for co-located services. |
+| `GLUETUN_HTTPPROXY` / `GLUETUN_SHADOWSOCKS` | `off` | Explicitly disable optional Gluetun proxy services that can block LAN traffic. |
 | `QBT_WEBUI_PORT` / `QBT_HTTP_PORT_HOST` | `8080` / `8081` | Internal and host ports for the qBittorrent Web UI. |
 | `MEDIA_DIR`, `DOWNLOADS_DIR`, `COMPLETED_DIR`, `MOVIES_DIR`, `TV_DIR`, `SUBS_DIR` | See defaults | Bind mounts for media and download libraries. |
 | `PUID` / `PGID` | Current user/group | Container runtime user identity. |
