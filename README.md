@@ -64,6 +64,15 @@ Additional command:
 | `VPN_TYPE` / `DEFAULT_VPN_TYPE` | `openvpn` | Active VPN mode; defaults can be overridden for unattended runs. |
 | `QBT_USER` / `QBT_PASS` | empty | Optional Web UI credentials pre-seeded when hashing dependencies exist. |
 | `GLUETUN_API_KEY` | generated | Control API RBAC secret written to `.env` and `gluetun/auth/config.toml`. |
+| `GLUETUN_IMAGE` | `qmcgaw/gluetun:v3.38.0` | Pinned Gluetun image used for bootstrap key-gen and runtime Compose. |
+| `QBITTORRENT_IMAGE` | `lscr.io/linuxserver/qbittorrent:latest` | qBittorrent container image (shares Gluetun network namespace). |
+| `QBT_DOCKER_MODS` | `ghcr.io/gabe565/linuxserver-mod-vuetorrent` | Vuetorrent mod image applied via LinuxServer's `DOCKER_MODS`. |
+| `PF_SYNC_IMAGE` | `curlimages/curl:8.8.0` | Proton port-forward sync helper (only launched in OpenVPN mode). |
+| `SONARR_IMAGE` | `lscr.io/linuxserver/sonarr:latest` | Sonarr container image. |
+| `RADARR_IMAGE` | `lscr.io/linuxserver/radarr:latest` | Radarr container image. |
+| `PROWLARR_IMAGE` | `lscr.io/linuxserver/prowlarr:latest` | Prowlarr container image. |
+| `BAZARR_IMAGE` | `lscr.io/linuxserver/bazarr:latest` | Bazarr container image. |
+| `FLARESOLVERR_IMAGE` | `ghcr.io/flaresolverr/flaresolverr:latest` | FlareSolverr container image. |
 | `DEBUG` | `0` | When `1`, keeps installer logs (`--debug` sets this automatically). |
 
 #### Ports (host → container)
