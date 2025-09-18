@@ -1838,143 +1838,120 @@ pull_images() {
     warn "Pull failed; will rely on up"
   fi
 }
-start_with_checks() {
-  step "14/15 Starting the stack with enhanced health monitoring"
-  validate_creds_or_die
-  verify_gluetun_control_security
-  local MAX_RETRIES=5 RETRY=0 requires_pf control_use_auth=0
-  control_api_get() {
-    local host=$1 port=$2 path=$3 __out=$4
-    local url body code fallback=1
-    url="http://${host}:${port}${path}"
-    while :; do
-      if (( control_use_auth )); then
-        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-          --user "gluetun:${GLUETUN_API_KEY}" "$url" 2>/dev/null || echo 000)
-      else
-        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-          "$url" 2>/dev/null || echo 000)
-      fi
-      if [[ "$code" = 401 && $fallback -eq 1 && $control_use_auth -eq 1 ]]; then
-        control_use_auth=0
-        fallback=0
-        continue
-      fi
-      if [[ "$code" != 200 ]]; then
-        return 1
-      fi
-      if (( control_use_auth )); then
-        body=$(curl -fsS --max-time 5 --user "gluetun:${GLUETUN_API_KEY}" "$url" 2>/dev/null) || return 1
-      else
-        body=$(curl -fsS --max-time 5 "$url" 2>/dev/null) || return 1
-      fi
-      printf -v "$__out" '%s' "$body"
-      return 0
-    done
-  }
-  requires_pf="$([ "${VPN_TYPE}" = "openvpn" ] && echo 1 || echo 0)"
-  while [[ $RETRY -lt $MAX_RETRIES ]]; do
-    note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
-    run_or_warn compose_cmd --profile bootstrap config -q >/dev/null
-    run_or_warn compose_cmd --profile bootstrap up -d
-    run_or_warn compose_cmd ps
-    run_or_warn docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-    if ! is_dry && ! docker ps --format '{{.Names}}' | grep -q 'gluetun'; then
-      die "Gluetun container failed to start"
-    fi
-    local health_window=$((180 + 10 * 30))
-    local max_wait=$((health_window + 120))
-    if ! docker image inspect "${GLUETUN_IMAGE}" >/dev/null 2>&1; then
-      max_wait=$((max_wait + 60))
-    fi
-    note "Waiting for gluetun to report healthy (up to ${max_wait}s)..."
-    local waited=0 HEALTH="unknown" IP="" PF="" pf_raw=""
-    local ctrl_host
-    ctrl_host="$(control_access_host)"
-    local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
-    control_use_auth=0
-    if [ -n "${GLUETUN_API_KEY:-}" ]; then
-      control_use_auth=1
-    fi
-    while [[ $waited -lt ${max_wait} ]]; do
-      HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
-      if ! control_api_get "$ctrl_host" "$ctrl_port" "/v1/publicip/ip" IP; then
-        IP=""
-      fi
-      if (( requires_pf )); then
-        if control_api_get "$ctrl_host" "$ctrl_port" "/v1/openvpn/portforwarded" pf_raw; then
-          pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
-        else
-          pf_raw=""
-        fi
-        PF=""
-        case "$pf_raw" in
-          *:*) PF="${pf_raw##*:}" ;;
-          *)   PF="$pf_raw" ;;
-        esac
-        if ! printf '%s' "$PF" | grep -Eq '^[1-9][0-9]{3,4}$'; then
-          PF=""
-        fi
-      fi
-      if [[ "$HEALTH" = healthy && -n "$IP" ]]; then
-        break
-      fi
-      sleep 5
-      waited=$((waited + 5))
-    done
-    if [[ "$HEALTH" = healthy && -n "$IP" ]]; then
-      ok "Gluetun healthy; IP: ${IP}${PF:+, PF: ${PF}}"
-      break
-    fi
-    warn "Gluetun not healthy yet; down & retry"
-    run_or_warn compose_cmd down >/dev/null 2>&1
-    clear_port_conflicts
-    RETRY=$((RETRY + 1))
+wait_for_container_healthy() {
+  local container="$1" timeout="${2:-300}" waited=0
+  while [[ $waited -lt $timeout ]]; do
+    local health
+    health="$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || echo 'unknown')"
+    [[ "$health" == "healthy" ]] && return 0
+    sleep 5
+    waited=$((waited + 5))
   done
-  if [[ "$HEALTH" != healthy ]]; then
-    if (( requires_pf )); then
-      warn "Troubleshooting hint: docker exec gluetun curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/status"
-      warn "Troubleshooting hint: docker exec gluetun curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded"
-    else
-      warn "Troubleshooting hint: docker exec gluetun curl -fsS http://${GLUETUN_CONTROL_HOST}:${GLUETUN_CONTROL_PORT}/v1/wireguard/status"
+  return 1
+}
+
+wait_for_vpn_connected() {
+  local timeout="${1:-180}" waited=0 ctrl_host ctrl_port endpoint status_pattern
+  ctrl_host="$(control_access_host)"
+  ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+
+  if [[ "${VPN_TYPE}" == "wireguard" ]]; then
+    endpoint="/v1/wireguard/status"
+    status_pattern="connected|running"
+  else
+    endpoint="/v1/openvpn/status"
+    status_pattern="running"
+  fi
+
+  while [[ $waited -lt $timeout ]]; do
+    if curl -fsS --max-time 5 -u "gluetun:${GLUETUN_API_KEY}" \
+      "http://${ctrl_host}:${ctrl_port}${endpoint}" | grep -Eqi "${status_pattern}"; then
+      return 0
     fi
-    die "Gluetun did not achieve connectivity; check: docker logs gluetun"
-  fi
-  compose_cmd --profile prod up -d || die "Failed to start stack"
-  note "Remaining services (prod profile) launched; health checks may take up to 90s"
-  print_qbt_temp_password_if_any
-  if [ -n "${QBT_USER:-}" ] && [ -n "${QBT_PASS:-}" ]; then
-    ok "qBittorrent credentials preseeded"
-  fi
-  run_or_warn compose_cmd ps
-  local ip pf_port="" client_host
-  client_host="$(control_access_host)"
-  ip=""
-  if ! control_api_get "$client_host" "${GLUETUN_CONTROL_PORT:-8000}" "/v1/publicip/ip" ip; then
-    ip=""
-  fi
-  note "Public IP: ${ip}"
-  if (( requires_pf )); then
-    if control_api_get "$client_host" "${GLUETUN_CONTROL_PORT:-8000}" "/v1/openvpn/portforwarded" pf_raw; then
-      pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
-    else
-      pf_raw=""
-    fi
+    sleep 10
+    waited=$((waited + 10))
+  done
+  return 1
+}
+
+wait_for_port_forwarding() {
+  [[ "${VPN_TYPE}" != "openvpn" ]] && return 0
+
+  local timeout="${1:-180}" waited=0 ctrl_host ctrl_port
+  ctrl_host="$(control_access_host)"
+  ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+
+  while [[ $waited -lt $timeout ]]; do
+    local pf_raw pf_port
+    pf_raw="$(curl -fsS --max-time 5 -u "gluetun:${GLUETUN_API_KEY}" \
+      "http://${ctrl_host}:${ctrl_port}/v1/openvpn/portforwarded" 2>/dev/null || true)"
     case "$pf_raw" in
       *:*) pf_port="${pf_raw##*:}" ;;
       *)   pf_port="$pf_raw" ;;
     esac
+
     if printf '%s' "$pf_port" | grep -Eq '^[1-9][0-9]{3,4}$'; then
-      if [[ "$pf_raw" != "$pf_port" && -n "$pf_raw" ]]; then
-        note "Forwarded port: ${pf_port} (${pf_raw})"
-      else
-        note "Forwarded port: ${pf_port}"
-      fi
-    else
-      note "Forwarded port response: ${pf_raw}"
+      note "Port forwarding ready: $pf_port"
+      return 0
     fi
+
+    sleep 15
+    waited=$((waited + 15))
+  done
+  return 1
+}
+
+start_with_checks() {
+  step "14/15 Starting stack with phased bootstrap"
+  validate_creds_or_die
+  verify_gluetun_control_security
+
+  bootstrap_fail() {
+    local msg="$1"
+    {
+      echo "=== GLUETUN DIAGNOSTICS ==="
+      docker compose ps
+      docker logs --tail=50 gluetun
+    } >>"$LOG_FILE"
+    die "$msg"
+  }
+
+  note "Phase 1: Starting Gluetun..."
+  compose_cmd up -d gluetun || bootstrap_fail "Failed to start Gluetun"
+
+  note "Phase 2: Waiting for container health..."
+  wait_for_container_healthy gluetun 300 || bootstrap_fail "Gluetun container failed health check"
+
+  note "Phase 3: Waiting for VPN connection..."
+  wait_for_vpn_connected 180 || bootstrap_fail "VPN connection failed"
+
+  note "Phase 4: Starting dependent services..."
+  compose_cmd up -d qbittorrent sonarr radarr prowlarr bazarr flaresolverr || bootstrap_fail "Failed to start services"
+
+  wait_for_container_healthy qbittorrent 90 || warn "qBittorrent health check failed"
+
+  print_qbt_temp_password_if_any
+  if [[ -n "${QBT_USER:-}" && -n "${QBT_PASS:-}" ]]; then
+    ok "qBittorrent credentials preseeded"
+  fi
+
+  run_or_warn compose_cmd ps
+
+  local ctrl_host ctrl_port public_ip
+  ctrl_host="$(control_access_host)"
+  ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
+  public_ip="$(curl -fsS --max-time 5 -u "gluetun:${GLUETUN_API_KEY}" \
+    "http://${ctrl_host}:${ctrl_port}/v1/publicip/ip" 2>/dev/null || true)"
+  if [[ -n "$public_ip" ]]; then
+    note "Public IP: ${public_ip}"
   else
-    note "WireGuard mode detected; Proton port forwarding not applicable."
+    warn "Unable to determine public IP"
+  fi
+
+  if [[ "${VPN_TYPE}" == "openvpn" ]]; then
+    note "Phase 5: Waiting for port forwarding..."
+    compose_cmd up -d pf-sync || warn "Failed to start pf-sync"
+    wait_for_port_forwarding 180 || warn "Port forwarding not ready"
   fi
 }
 
