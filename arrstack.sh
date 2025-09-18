@@ -96,8 +96,16 @@ _exec_cmd() {
 
   local rc
   if [[ "${argv[0]}" == docker && -e /dev/fd/3 ]]; then
-    "${argv[@]}" 2>&1 | tee /dev/fd/3
-    rc=${PIPESTATUS[0]}
+    if [[ -e /dev/fd/4 ]]; then
+      "${argv[@]}" \
+        > >(tee /dev/fd/3) \
+        2> >(tee /dev/fd/4 >&2)
+    else
+      "${argv[@]}" \
+        > >(tee /dev/fd/3) \
+        2> >(tee /dev/fd/3 >&2)
+    fi
+    rc=$?
   else
     "${argv[@]}"
     rc=$?
@@ -782,7 +790,12 @@ ensure_proton_auth_core() {
       (( rc == 0 )) && migrated=1
     fi
     if (( migrated == 0 )); then
-      atomic_write "${PROTON_AUTH_FILE}" "# Proton account credentials (do NOT include +pmp)\nPROTON_USER=\nPROTON_PASS=\n"
+      atomic_write "${PROTON_AUTH_FILE}" "$(cat <<'EOF'
+# Proton account credentials (do NOT include +pmp)
+PROTON_USER=
+PROTON_PASS=
+EOF
+)"
       warn "Created template ${PROTON_AUTH_FILE}; edit with your Proton credentials"
     fi
   else
@@ -952,8 +965,35 @@ write_env() {
     PP="$(grep -E '^PROTON_PASS=' "${PROTON_AUTH_FILE}" | cut -d= -f2- | tr -d '"' || true)"
     PP="$(printf '%s' "${PP}" | sed 's/\\n$//')"
   fi
-  local env_content
-  env_content=$(
+  local env_extra="" OUSER=""
+  local proton_env="${ARRCONF_DIR}/proton.env"
+  if [[ "${VPN_TYPE}" = "openvpn" ]]; then
+    [[ -n "${PU}" && -n "${PP}" ]] || die "Missing Proton credentials at ${PROTON_AUTH_FILE}"
+    OUSER="$(ensure_pmp "${PU}")"
+    env_extra="$(cat <<EOF
+
+OPENVPN_USER=${OUSER}
+OPENVPN_PASSWORD=${PP}
+EOF
+)"
+    atomic_write "${proton_env}" "$(cat <<EOF
+OPENVPN_USER=${OUSER}
+OPENVPN_PASSWORD=${PP}
+EOF
+)"
+  else
+    env_extra="$(cat <<'EOF'
+
+WIREGUARD_MTU=1320
+EOF
+)"
+    atomic_write "${proton_env}" "$(cat <<'EOF'
+# Proton OpenVPN credentials (unused for WireGuard)
+EOF
+)"
+  fi
+  local env_body
+  env_body="$({
     cat <<EOF
 # IDs & timezone
 PUID=${PUID}
@@ -997,22 +1037,9 @@ SERVER_COUNTRIES="${CN}"
 # Set to 0 to disable periodic Gluetun server updates
 UPDATER_PERIOD=${UPDATER_PERIOD}
 EOF
-  )
-  local proton_env="${ARRCONF_DIR}/proton.env"
-  if [[ "${VPN_TYPE}" = "openvpn" ]]; then
-    [[ -n "${PU}" && -n "${PP}" ]] || die "Missing Proton credentials at ${PROTON_AUTH_FILE}"
-    local OUSER
-    OUSER="$(ensure_pmp "${PU}")"
-    env_content+="
-OPENVPN_USER=${OUSER}
-OPENVPN_PASSWORD=${PP}"
-    atomic_write "${proton_env}" "$(printf 'OPENVPN_USER=%s\nOPENVPN_PASSWORD=%s\n' "${OUSER}" "${PP}")"
-  else
-    atomic_write "${proton_env}" "# Proton OpenVPN credentials (unused for WireGuard)\n"
-    env_content+="
-WIREGUARD_MTU=1320"
-  fi
-  atomic_write "${envf}" "${env_content}\n"
+    printf '%s' "${env_extra}"
+  })"
+  atomic_write "${envf}" "${env_body}"
   run chmod 600 "${proton_env}"
   run chmod 600 "${envf}"
   ok "Wrote ${envf}"
