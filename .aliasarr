@@ -22,6 +22,10 @@ PROTON_AUTH_FILE="${PROTON_AUTH_FILE:-$ARRCONF_DIR/proton.auth}"
 LAN_IP="${LAN_IP:-192.168.1.50}"
 LOCALHOST_ADDR="${LOCALHOST_ADDR:-$(_arr_get LOCALHOST_ADDR)}"
 [[ -n "$LOCALHOST_ADDR" ]] || LOCALHOST_ADDR=127.0.0.1
+GLUETUN_CONTROL_BIND_HOST="$(_arr_get GLUETUN_CONTROL_BIND_HOST)"
+if [[ -z "$GLUETUN_CONTROL_BIND_HOST" ]]; then
+  GLUETUN_CONTROL_BIND_HOST="$LOCALHOST_ADDR"
+fi
 
 # ----------------[ Utilities ]-----------------
 _arr_exists() { docker ps -a --format '{{.Names}}' | grep -qx "$1"; }
@@ -152,7 +156,7 @@ pvpn() {
   _restart(){ ( cd "$stack_dir" && docker compose --env-file "$env_file" restart gluetun ); }
   local auth="-u gluetun:${GLUETUN_API_KEY}"
   local ctl_host
-  ctl_host="$(_arr_access_host "$LAN_IP")"
+  ctl_host="$(_arr_access_host "$GLUETUN_CONTROL_BIND_HOST")"
 
   case "$cmd" in
     c|connect)   ( cd "$stack_dir" && docker compose --env-file "$env_file" up -d gluetun qbittorrent );;

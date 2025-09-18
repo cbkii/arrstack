@@ -11,7 +11,7 @@
   - WireGuard: place `proton.conf` (or `wg*.conf`) in `${ARRCONF_DIR}`, `${ARR_DOCKER_DIR}/gluetun`, or `${LEGACY_VPNCONFS_DIR}`.
 - Filesystem: ensure directories referenced in `arrconf/userconf.defaults.sh` (or overrides in `arrconf/userconf.sh`) exist and are writable before running.
 - Ports: free the values mapped to `${GLUETUN_CONTROL_PORT}`, `${QBT_HTTP_PORT_HOST}`, `${SONARR_PORT}`, `${RADARR_PORT}`, `${PROWLARR_PORT}`, `${BAZARR_PORT}`, and `${FLARESOLVERR_PORT}`.
-- LAN binding: set `LAN_IP` to your LAN adapter for restricted exposure; `0.0.0.0` or public IPs widen the control API scope and trigger warnings.
+- LAN binding: set `LAN_IP` to your LAN adapter for the web UIs; the Gluetun control API publishes via `GLUETUN_CONTROL_BIND_HOST` (defaults to `127.0.0.1` to avoid LAN exposure).
 
 ### 3) Quick start
 **OpenVPN + Proton PF**
@@ -53,12 +53,15 @@ Additional command:
 | `ARR_ENV_FILE` | `${ARR_STACK_DIR}/.env` | Generated Compose environment file consumed by the installer and docker compose. |
 | `LAN_IP` | `192.168.1.11` | Host bind for all service ports; `0.0.0.0` exposes every interface. |
 | `LOCALHOST_ADDR` / `LOCALHOST_NAME` | `127.0.0.1` / `localhost` | Default client host for Gluetun API and UI URLs. |
-| `GLUETUN_CONTROL_PORT` | `8000` | Gluetun control API port; mapped via `${LAN_IP}` and guarded by RBAC. |
+| `GLUETUN_CONTROL_PORT` | `8000` | Gluetun control API port; paired with `${GLUETUN_CONTROL_BIND_HOST}` and RBAC. |
+| `GLUETUN_CONTROL_BIND_HOST` | `${LOCALHOST_ADDR}` | Host interface exposed for the control API (defaults to loopback). |
+| `GLUETUN_CONTROL_LISTEN_ADDR` | `127.0.0.1` | Container-side bind address for the control server. |
 | `QBT_WEBUI_PORT` / `QBT_HTTP_PORT_HOST` | `8080` / `8081` | Internal and host ports for the qBittorrent Web UI. |
 | `MEDIA_DIR`, `DOWNLOADS_DIR`, `COMPLETED_DIR`, `MOVIES_DIR`, `TV_DIR`, `SUBS_DIR` | See defaults | Bind mounts for media and download libraries. |
 | `PUID` / `PGID` | Current user/group | Container runtime user identity. |
 | `TIMEZONE` | `Australia/Sydney` | Propagated to containers. |
-| `SERVER_COUNTRIES` | `Netherlands` | Gluetun server selection list for ProtonVPN. |
+| `SERVER_COUNTRIES` | `Netherlands,Germany,Switzerland` | Default Proton VPN countries passed to Gluetun. |
+| `SERVER_HOSTNAMES` | empty | Optional Proton VPN server hostnames (overrides country list when set). |
 | `UPDATER_PERIOD` | `24h` | Gluetun server list refresh interval (`0` disables updates). |
 | `PROTON_AUTH_FILE` | `${ARRCONF_DIR}/proton.auth` | Location of Proton credentials template (600 permissions). |
 | `VPN_TYPE` / `DEFAULT_VPN_TYPE` | `openvpn` | Active VPN mode; defaults can be overridden for unattended runs. |
@@ -75,13 +78,15 @@ Additional command:
 | `FLARESOLVERR_IMAGE` | `ghcr.io/flaresolverr/flaresolverr:latest` | FlareSolverr container image. |
 | `DEBUG` | `0` | When `1`, keeps installer logs (`--debug` sets this automatically). |
 
+ProtonVPN selection tips: prefer unquoted comma-separated country lists such as `SERVER_COUNTRIES=Netherlands,Germany,Switzerland`, or set `SERVER_HOSTNAMES` to explicit Proton hostnames when you need deterministic exits.
+
 #### Ports (host → container)
 
-All port bindings honour `LAN_IP`; keep it on an RFC1918 address unless you intend to expose the stack broadly.
+Most port bindings honour `LAN_IP`; keep it on an RFC1918 address unless you intend to expose the stack broadly. The Gluetun control API instead respects `GLUETUN_CONTROL_BIND_HOST` (loopback by default).
 
 | Service | Host port | Container endpoint | Controlled by |
 | ------- | --------- | ------------------ | ------------- |
-| Gluetun control API | `${LAN_IP}:${GLUETUN_CONTROL_PORT}` | `0.0.0.0:${GLUETUN_CONTROL_PORT}` | `GLUETUN_CONTROL_PORT` |
+| Gluetun control API | `${GLUETUN_CONTROL_BIND_HOST}:${GLUETUN_CONTROL_PORT}` | `${GLUETUN_CONTROL_LISTEN_ADDR}:${GLUETUN_CONTROL_PORT}` | `GLUETUN_CONTROL_PORT` / `GLUETUN_CONTROL_BIND_HOST` |
 | qBittorrent Web UI | `${LAN_IP}:${QBT_HTTP_PORT_HOST}` | `qbittorrent:${QBT_WEBUI_PORT}` | `QBT_HTTP_PORT_HOST` / `QBT_WEBUI_PORT` |
 | Sonarr | `${LAN_IP}:${SONARR_PORT}` | `sonarr:${SONARR_PORT}` | `SONARR_PORT` |
 | Radarr | `${LAN_IP}:${RADARR_PORT}` | `radarr:${RADARR_PORT}` | `RADARR_PORT` |
@@ -141,7 +146,7 @@ The installer creates these paths if they do not exist; adjust overrides in `arr
 ### 9) Security notes
 - `arrconf/` and Proton credential files are forced to `700/600` to guard secrets; the installer rewrites `PROTON_USER` with `+pmp` inside `.env` when needed.
 - Gluetun’s control API exposes `/v1/publicip/ip`, `/v1/openvpn/status`, `/v1/openvpn/portforwarded`, and related endpoints. Basic auth is enforced via `${ARR_DOCKER_DIR}/gluetun/auth/config.toml`, with the secret stored in `${ARR_STACK_DIR}/.env` as `GLUETUN_API_KEY`.
-- The container listens on `0.0.0.0:${GLUETUN_CONTROL_PORT}` while the host bind honours `${LAN_IP}`. Keep `LAN_IP` on a private range or front the API with TLS + auth; never expose it publicly without safeguards.
+- The control server now binds to `127.0.0.1:${GLUETUN_CONTROL_PORT}` inside the container and publishes via `${GLUETUN_CONTROL_BIND_HOST}` on the host. Leave it on loopback or a private LAN, and add reverse-proxy/authentication before exposing it more broadly.
 
 ### 10) Logging
 - Default: logs stream to the terminal only; temporary files are discarded at exit.
