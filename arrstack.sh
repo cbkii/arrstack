@@ -1437,15 +1437,36 @@ YAML
           if [ -n "$${GLUETUN_API_KEY}" ]; then
             AUTH="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
+          curl_with_fallback() {
+            URL="$1";
+            CODE="000";
+            if [ -n "$$AUTH" ]; then
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 $$AUTH "$$URL" || echo 000);
+              if [ "$$CODE" = "401" ]; then
+                AUTH="";
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
+              fi;
+            else
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
+            fi;
+            if [ "$$CODE" != "200" ]; then
+              return 1;
+            fi;
+            if [ -n "$$AUTH" ]; then
+              curl -fsS --max-time 5 $$AUTH "$$URL";
+            else
+              curl -fsS --max-time 5 "$$URL";
+            fi;
+          };
+          curl_with_fallback "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
 YAML
     if [ "${VPN_TYPE}" = "openvpn" ]; then
       cat <<'YAML'
-          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
+          curl_with_fallback "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
 YAML
     else
       cat <<'YAML'
-          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
+          curl_with_fallback "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
 YAML
     fi
     cat <<'YAML'
@@ -1630,7 +1651,28 @@ YAML
           if [ -n "$${GLUETUN_API_KEY}" ]; then
             AUTH="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl -fsS $$AUTH "http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "(^|:)[1-9][0-9]{3,4}$"
+          curl_with_fallback() {
+            URL="$1";
+            CODE="000";
+            if [ -n "$$AUTH" ]; then
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 $$AUTH "$$URL" || echo 000);
+              if [ "$$CODE" = "401" ]; then
+                AUTH="";
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
+              fi;
+            else
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$$URL" || echo 000);
+            fi;
+            if [ "$$CODE" != "200" ]; then
+              return 1;
+            fi;
+            if [ -n "$$AUTH" ]; then
+              curl -fsS --max-time 5 $$AUTH "$$URL";
+            else
+              curl -fsS --max-time 5 "$$URL";
+            fi;
+          };
+          curl_with_fallback "http://$${GLUETUN_CONTROL_HOST}:$${GLUETUN_CONTROL_PORT}/v1/openvpn/portforwarded" | grep -Eq "(^|:)[1-9][0-9]{3,4}$"
         '
       interval: 45s
       timeout: 10s
@@ -1795,7 +1837,36 @@ start_with_checks() {
   step "14/15 Starting the stack with enhanced health monitoring"
   validate_creds_or_die
   verify_gluetun_control_security
-  local MAX_RETRIES=5 RETRY=0 requires_pf
+  local MAX_RETRIES=5 RETRY=0 requires_pf control_use_auth=0
+  control_api_get() {
+    local host=$1 port=$2 path=$3 __out=$4
+    local url body code fallback=1
+    url="http://${host}:${port}${path}"
+    while :; do
+      if (( control_use_auth )); then
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+          --user "gluetun:${GLUETUN_API_KEY}" "$url" 2>/dev/null || echo 000)
+      else
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+          "$url" 2>/dev/null || echo 000)
+      fi
+      if [[ "$code" = 401 && $fallback -eq 1 && $control_use_auth -eq 1 ]]; then
+        control_use_auth=0
+        fallback=0
+        continue
+      fi
+      if [[ "$code" != 200 ]]; then
+        return 1
+      fi
+      if (( control_use_auth )); then
+        body=$(curl -fsS --max-time 5 --user "gluetun:${GLUETUN_API_KEY}" "$url" 2>/dev/null) || return 1
+      else
+        body=$(curl -fsS --max-time 5 "$url" 2>/dev/null) || return 1
+      fi
+      printf -v "$__out" '%s' "$body"
+      return 0
+    done
+  }
   requires_pf="$([ "${VPN_TYPE}" = "openvpn" ] && echo 1 || echo 0)"
   while [[ $RETRY -lt $MAX_RETRIES ]]; do
     note "→ Attempt $((RETRY + 1))/${MAX_RETRIES}"
@@ -1817,16 +1888,21 @@ start_with_checks() {
     local ctrl_host
     ctrl_host="$(control_access_host)"
     local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
-    local -a curl_cmd=(curl -fsS --max-time 5)
+    control_use_auth=0
     if [ -n "${GLUETUN_API_KEY:-}" ]; then
-      curl_cmd+=(--user "gluetun:${GLUETUN_API_KEY}")
+      control_use_auth=1
     fi
     while [[ $waited -lt ${max_wait} ]]; do
       HEALTH="$(docker inspect gluetun --format='{{.State.Health.Status}}' 2>/dev/null || echo unknown)"
-      IP="$("${curl_cmd[@]}" "http://${ctrl_host}:${ctrl_port}/v1/publicip/ip" 2>/dev/null || true)"
+      if ! control_api_get "$ctrl_host" "$ctrl_port" "/v1/publicip/ip" IP; then
+        IP=""
+      fi
       if (( requires_pf )); then
-        pf_raw="$("${curl_cmd[@]}" "http://${ctrl_host}:${ctrl_port}/v1/openvpn/portforwarded" 2>/dev/null || true)"
-        pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
+        if control_api_get "$ctrl_host" "$ctrl_port" "/v1/openvpn/portforwarded" pf_raw; then
+          pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
+        else
+          pf_raw=""
+        fi
         PF=""
         case "$pf_raw" in
           *:*) PF="${pf_raw##*:}" ;;
@@ -1869,15 +1945,17 @@ start_with_checks() {
   run_or_warn compose_cmd ps
   local ip pf_port="" client_host
   client_host="$(control_access_host)"
-  local -a post_curl=(curl -fsS --max-time 5)
-  if [ -n "${GLUETUN_API_KEY:-}" ]; then
-    post_curl+=(--user "gluetun:${GLUETUN_API_KEY}")
+  ip=""
+  if ! control_api_get "$client_host" "${GLUETUN_CONTROL_PORT:-8000}" "/v1/publicip/ip" ip; then
+    ip=""
   fi
-  ip="$("${post_curl[@]}" "http://${client_host}:${GLUETUN_CONTROL_PORT:-8000}/v1/publicip/ip" 2>/dev/null || true)"
   note "Public IP: ${ip}"
   if (( requires_pf )); then
-    pf_raw="$("${post_curl[@]}" "http://${client_host}:${GLUETUN_CONTROL_PORT:-8000}/v1/openvpn/portforwarded" 2>/dev/null || true)"
-    pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
+    if control_api_get "$client_host" "${GLUETUN_CONTROL_PORT:-8000}" "/v1/openvpn/portforwarded" pf_raw; then
+      pf_raw="$(printf '%s' "$pf_raw" | tr -d '\r\n')"
+    else
+      pf_raw=""
+    fi
     case "$pf_raw" in
       *:*) pf_port="${pf_raw##*:}" ;;
       *)   pf_port="$pf_raw" ;;
