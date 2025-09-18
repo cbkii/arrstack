@@ -107,12 +107,12 @@ The installer creates these paths if they do not exist; adjust overrides in `arr
 2. Verifies/installs dependencies, then stops any existing containers, frees critical ports, halts native services, backs up data, and purges conflicting packages.
 3. Creates directory structure, tightens `arrconf/` permissions, migrates legacy Proton secrets, and ensures Proton auth files exist with `600` mode.
 4. Handles Gluetun API key reuse or rotation, writes RBAC config, and generates the `.env` plus Proton credentials/WireGuard variables.
-5. Seeds qBittorrent configuration and optional credentials, writes `docker-compose.yml`, pulls images, and bootstraps Gluetun with repeated health polling before launching the full stack and helper aliases.
+5. Seeds qBittorrent configuration and optional credentials, verifies the stored WebUI hash aligns with `QBT_USER/QBT_PASS` for pf-sync, writes `docker-compose.yml`, pulls images, and bootstraps Gluetun with repeated health polling before launching the full stack and helper aliases.
 
 ### 7) Runtime model
 - Docker Compose profiles: `bootstrap` starts only Gluetun; `prod` adds qBittorrent, the Proton PF synchroniser (OpenVPN only), and the *arr services.
 - Health gating: Gluetun must expose a healthy public IP (and OpenVPN PF when applicable) before `prod` services launch; qBittorrent’s health check polls `/api/v2/app/version` and each *arr container responds on its HTTP port.
-- The `pf-sync` sidecar watches Gluetun’s `/v1/openvpn/portforwarded` endpoint, pushes the value into qBittorrent via `/api/v2/app/setPreferences`, and forces UPnP off so the Proton assignment always wins.
+- The `pf-sync` sidecar watches Gluetun’s `/v1/openvpn/portforwarded` endpoint, requests a lease once Gluetun is healthy, and pushes the value into qBittorrent via `/api/v2/app/setPreferences` (logging if WebUI authentication fails) while forcing UPnP off so the Proton assignment always wins.
 - Proton issues a fresh forwarded port every OpenVPN session. Expect qBittorrent’s listening port to change after reconnects or restarts.
 
 ### 8) Daily operations
@@ -189,6 +189,7 @@ curl -fsS http://${LOCALHOST_ADDR:-127.0.0.1}:${QBT_HTTP_PORT_HOST}/api/v2/app/p
 | LAN_IP reset to `0.0.0.0` | Update `LAN_IP` in `arrconf/userconf.sh` to a host-local RFC1918 address and rerun. |
 | Need a new Gluetun API key | Run `./arrstack.sh --rotate-apikey --debug` (optional) to regenerate and persist a fresh key. |
 | Proton PF mismatch (OpenVPN) | Compare the Gluetun and qBittorrent port values above; run `qbtportsync` or restart `pf-sync`. |
+| pf-sync cannot authenticate to qBittorrent | Ensure `QBT_USER`/`QBT_PASS` in `arrconf/userconf.sh` match the WebUI credentials (or leave both unset to rely on local-auth bypass) and rerun the installer to refresh the hash. |
 
 ### 12) Limits & upgrades
 - Proton port forwarding only works in OpenVPN mode; WireGuard runs without PF or the `pf-sync` helper.
