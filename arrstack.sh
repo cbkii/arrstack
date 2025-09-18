@@ -1356,22 +1356,22 @@ YAML
           if [ -n "$${GLUETUN_API_KEY}" ]; then
             AUTH="--user gluetun:$${GLUETUN_API_KEY}";
           fi;
-          curl -fsS $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
+          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/publicip/ip" >/dev/null &&
 YAML
     if [ "${VPN_TYPE}" = "openvpn" ]; then
       cat <<'YAML'
-          curl -fsS $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
+          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/openvpn/status" | grep -qi "running"
 YAML
     else
       cat <<'YAML'
-          curl -fsS $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
+          curl -fsS --max-time 5 $$AUTH "http://127.0.0.1:${GLUETUN_CONTROL_PORT}/v1/wireguard/status" | grep -Eqi "connected|running"
 YAML
     fi
     cat <<'YAML'
         '
-      interval: 30s
-      timeout: 15s
-      retries: 10
+      interval: 10s
+      timeout: 5s
+      retries: 6
       start_period: 180s
     restart: unless-stopped
 
@@ -1736,7 +1736,7 @@ start_with_checks() {
     local ctrl_host
     ctrl_host="$(lan_access_host)"
     local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
-    local -a curl_cmd=(curl -fsS)
+    local -a curl_cmd=(curl -fsS --max-time 5)
     if [ -n "${GLUETUN_API_KEY:-}" ]; then
       curl_cmd+=(--user "gluetun:${GLUETUN_API_KEY}")
     fi
@@ -1788,7 +1788,7 @@ start_with_checks() {
   run_or_warn compose_cmd ps
   local ip pf_port="" client_host
   client_host="$(lan_access_host)"
-  local -a post_curl=(curl -fsS)
+  local -a post_curl=(curl -fsS --max-time 5)
   if [ -n "${GLUETUN_API_KEY:-}" ]; then
     post_curl+=(--user "gluetun:${GLUETUN_API_KEY}")
   fi
