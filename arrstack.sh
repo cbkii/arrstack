@@ -539,15 +539,19 @@ preflight() {
   done
 
   local ctrl_port ctrl_host_bind ctrl_client_host ctrl_container_bind
+  local lan_host_bind lan_access_host_resolved
   ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
   ctrl_host_bind="${GLUETUN_CONTROL_BIND_HOST:-${LAN_IP:-0.0.0.0}}"
   ctrl_client_host="$(control_access_host)"
   ctrl_container_bind="${GLUETUN_CONTROL_LISTEN_ADDR:-127.0.0.1}"
+  lan_host_bind="${LAN_IP:-0.0.0.0}"
+  lan_access_host_resolved="$(lan_access_host)"
 
   note "Summary:"
   note "  • VPN_TYPE=${VPN_TYPE}"
+  note "  • LAN_IP binding for service UIs: ${lan_host_bind}"
   note "  • Control API: container bind ${ctrl_container_bind}:${ctrl_port}; host ${ctrl_host_bind}:${ctrl_port}; client URL http://${ctrl_client_host}:${ctrl_port}"
-  note "  • WebUI host port (qB): ${QBT_HTTP_PORT_HOST}  internal: ${QBT_WEBUI_PORT}"
+  note "  • qB Web UI: host ${lan_host_bind}:${QBT_HTTP_PORT_HOST}; container ${QBT_WEBUI_PORT}; access URL http://${lan_access_host_resolved}:${QBT_HTTP_PORT_HOST}"
   confirm_or_die
 }
 
