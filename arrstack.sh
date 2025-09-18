@@ -159,9 +159,9 @@ ARR_ENV_FILE="${ARR_ENV_FILE:-${ARR_STACK_DIR}/.env}"
 # Export for compose templating
 export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_ENV_FILE LEGACY_VPNCONFS_DIR ARRCONF_DIR
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MOVIES_DIR TV_DIR SUBS_DIR
-export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP LOCALHOST_ADDR LOCALHOST_NAME GLUETUN_CONTROL_PORT GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE UPDATER_PERIOD
+export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP LOCALHOST_ADDR LOCALHOST_NAME GLUETUN_CONTROL_PORT GLUETUN_CONTROL_BIND_HOST GLUETUN_CONTROL_LISTEN_ADDR GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET PUID PGID TIMEZONE UPDATER_PERIOD
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
-export DEFAULT_VPN_TYPE SERVER_COUNTRIES DEFAULT_COUNTRY GLUETUN_API_KEY
+export DEFAULT_VPN_TYPE SERVER_COUNTRIES SERVER_HOSTNAMES DEFAULT_COUNTRY GLUETUN_API_KEY
 
 : "${GLUETUN_IMAGE:=qmcgaw/gluetun:v3.38.0}"
 : "${QBITTORRENT_IMAGE:=lscr.io/linuxserver/qbittorrent:latest}"
@@ -441,7 +441,7 @@ have_ip() {
 is_private_ipv4() {
   local ip="$1"
   case "$ip" in
-    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*|127.*)
       return 0 ;;
     *)
       return 1 ;;
@@ -465,6 +465,18 @@ ensure_lan_ip_binding() {
 
 lan_access_host() {
   local host="${LAN_IP:-}"
+  if [[ -z "$host" || "$host" = "0.0.0.0" ]]; then
+    printf '%s' "${LOCALHOST_ADDR:-127.0.0.1}"
+  else
+    printf '%s' "$host"
+  fi
+}
+
+control_access_host() {
+  local host="${GLUETUN_CONTROL_BIND_HOST:-}"
+  if [[ -z "$host" || "$host" = "0.0.0.0" ]]; then
+    host="${LAN_IP:-}"
+  fi
   if [[ -z "$host" || "$host" = "0.0.0.0" ]]; then
     printf '%s' "${LOCALHOST_ADDR:-127.0.0.1}"
   else
@@ -526,14 +538,15 @@ preflight() {
     esac
   done
 
-  local ctrl_port ctrl_host_bind ctrl_client_host
+  local ctrl_port ctrl_host_bind ctrl_client_host ctrl_container_bind
   ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
-  ctrl_host_bind="${LAN_IP:-0.0.0.0}"
-  ctrl_client_host="$(lan_access_host)"
+  ctrl_host_bind="${GLUETUN_CONTROL_BIND_HOST:-${LAN_IP:-0.0.0.0}}"
+  ctrl_client_host="$(control_access_host)"
+  ctrl_container_bind="${GLUETUN_CONTROL_LISTEN_ADDR:-127.0.0.1}"
 
   note "Summary:"
   note "  • VPN_TYPE=${VPN_TYPE}"
-  note "  • Control API: container bind 0.0.0.0:${ctrl_port}; host ${ctrl_host_bind}:${ctrl_port}; client URL http://${ctrl_client_host}:${ctrl_port}"
+  note "  • Control API: container bind ${ctrl_container_bind}:${ctrl_port}; host ${ctrl_host_bind}:${ctrl_port}; client URL http://${ctrl_client_host}:${ctrl_port}"
   note "  • WebUI host port (qB): ${QBT_HTTP_PORT_HOST}  internal: ${QBT_WEBUI_PORT}"
   confirm_or_die
 }
@@ -967,7 +980,13 @@ write_env() {
   step "11/15 Writing stack .env"
   local envf="${ARR_ENV_FILE}"
   ensure_dir "${ARR_STACK_DIR}"
-  local PU="" PP="" CN="${SERVER_COUNTRIES}"
+  local PU="" PP="" CN="${SERVER_COUNTRIES}" SHN="${SERVER_HOSTNAMES:-}"
+  CN="${CN%\"}"
+  CN="${CN#\"}"
+  CN="$(printf '%s' "${CN}" | sed -E 's/, +/,/g')"
+  SHN="${SHN%\"}"
+  SHN="${SHN#\"}"
+  SHN="$(printf '%s' "${SHN}" | sed -E 's/, +/,/g')"
   if [[ "${UPDATER_PERIOD}" == "0" ]]; then
     warn "UPDATER_PERIOD=0 disables Proton server list updates; adjust in arrconf/userconf.sh if unintended"
   fi
@@ -1027,6 +1046,8 @@ FLARESOLVERR_IMAGE=${FLARESOLVERR_IMAGE}
 
 # Network and qBittorrent
 GLUETUN_CONTROL_PORT=${GLUETUN_CONTROL_PORT}
+GLUETUN_CONTROL_BIND_HOST=${GLUETUN_CONTROL_BIND_HOST}
+GLUETUN_CONTROL_LISTEN_ADDR=${GLUETUN_CONTROL_LISTEN_ADDR}
 QBT_HTTP_PORT_HOST=${QBT_HTTP_PORT_HOST}
 QBT_WEBUI_PORT=${QBT_WEBUI_PORT}
 GLUETUN_CONTROL_HOST=${GLUETUN_CONTROL_HOST}
@@ -1055,7 +1076,8 @@ SUBS_DIR=${SUBS_DIR}
 
 # ProtonVPN config
 VPN_TYPE=${VPN_TYPE}
-SERVER_COUNTRIES="${CN}"
+SERVER_COUNTRIES=${CN}
+SERVER_HOSTNAMES=${SHN}
 # Set to 0 to disable periodic Gluetun server updates
 UPDATER_PERIOD=${UPDATER_PERIOD}
 EOF
@@ -1070,18 +1092,19 @@ EOF
 # Warn if LAN_IP is 0.0.0.0 which exposes services on all interfaces
 warn_lan_ip() {
   if [ "${LAN_IP}" = "0.0.0.0" ]; then
-    warn "LAN_IP is set to 0.0.0.0 — this would expose the Gluetun API publicly. Set LAN_IP to your LAN interface IP (e.g. 192.168.1.10) for LAN-only access."
+    warn "LAN_IP is set to 0.0.0.0 — this exposes every published service port. Set LAN_IP to your LAN adapter (e.g. 192.168.1.10) unless you intend to listen on all interfaces."
     LAN_IP_ALL_INTERFACES=1
   elif [[ -n "${LAN_IP}" ]] && ! is_private_ipv4 "${LAN_IP}"; then
-    warn "LAN_IP=${LAN_IP} is not an RFC1918 address; ensure you intend to expose the Gluetun API beyond your LAN."
+    warn "LAN_IP=${LAN_IP} is not an RFC1918 address; ensure you intend to expose the stack beyond your LAN."
   fi
 }
 
 verify_gluetun_control_security() {
-  local ctrl_port host_bind access_host auth_file scope="LAN-only"
+  local ctrl_port host_bind access_host auth_file scope="LAN-only" container_bind
   ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
-  host_bind="${LAN_IP:-0.0.0.0}"
-  access_host="$(lan_access_host)"
+  host_bind="${GLUETUN_CONTROL_BIND_HOST:-${LAN_IP:-0.0.0.0}}"
+  access_host="$(control_access_host)"
+  container_bind="${GLUETUN_CONTROL_LISTEN_ADDR:-127.0.0.1}"
   auth_file="${ARR_DOCKER_DIR}/gluetun/auth/config.toml"
 
   if [[ -z "${GLUETUN_API_KEY:-}" ]]; then
@@ -1098,15 +1121,23 @@ verify_gluetun_control_security() {
 
   if [[ "${host_bind}" = "0.0.0.0" ]]; then
     scope="all host interfaces"
+  elif [[ "${host_bind}" = "${LOCALHOST_ADDR:-127.0.0.1}" ]] || [[ "${host_bind}" = 127.* ]] || [[ "${host_bind}" = localhost ]]; then
+    scope="loopback-only"
   elif ! is_private_ipv4 "${host_bind}"; then
     scope="non-RFC1918 (public)"
   fi
 
-  note "Control API mapping: container 0.0.0.0:${ctrl_port} → host ${host_bind}:${ctrl_port} (${scope})."
+  note "Control API mapping: container ${container_bind}:${ctrl_port} → host ${host_bind}:${ctrl_port} (${scope})."
   if [[ "${host_bind}" = "0.0.0.0" && "${LAN_IP_ALL_INTERFACES:-0}" != "1" ]]; then
-    warn "LAN_IP resolved to 0.0.0.0 — update arrconf/userconf.sh to pin it to your LAN adapter for tighter exposure."
+    warn "Control API host bind resolved to 0.0.0.0 — set GLUETUN_CONTROL_BIND_HOST (or LAN_IP) to a LAN or loopback address for tighter exposure."
   elif [[ "${scope}" = "non-RFC1918 (public)" ]]; then
-    warn "Set LAN_IP to an RFC1918 address (e.g. 192.168.x.x, 10.x.x.x, 172.16-31.x.x) to keep the control API LAN-scoped."
+    warn "Control API host bind ${host_bind} is public — restrict GLUETUN_CONTROL_BIND_HOST or add firewall rules."
+  fi
+
+  if [[ "${container_bind}" = "0.0.0.0" ]]; then
+    warn "Control server is listening on all container interfaces; set GLUETUN_CONTROL_LISTEN_ADDR=127.0.0.1 to keep it private."
+  elif [[ "${container_bind}" != "127.0.0.1" && "${container_bind}" != "localhost" ]]; then
+    warn "Control server listens on ${container_bind}; ensure this is an intentional override."
   fi
 
   local key_len=${#GLUETUN_API_KEY}
@@ -1373,6 +1404,7 @@ YAML
     fi
     cat <<'YAML'
       SERVER_COUNTRIES: "${SERVER_COUNTRIES}"
+      SERVER_HOSTNAMES: "${SERVER_HOSTNAMES}"
       # FREE_ONLY: "off"
       # DNS & stability
       DOT: "off"
@@ -1381,7 +1413,7 @@ YAML
       HEALTH_VPN_DURATION_INITIAL: 30s
       HEALTH_SUCCESS_WAIT_DURATION: 10s
       # Control server (RBAC)
-      HTTP_CONTROL_SERVER_ADDRESS: "0.0.0.0:${GLUETUN_CONTROL_PORT}"
+      HTTP_CONTROL_SERVER_ADDRESS: "${GLUETUN_CONTROL_LISTEN_ADDR:-127.0.0.1}:${GLUETUN_CONTROL_PORT}"
       HTTP_CONTROL_SERVER_LOG: "off"
       HTTP_CONTROL_SERVER_AUTH_FILE: /gluetun/auth/config.toml
       GLUETUN_API_KEY: ${GLUETUN_API_KEY}
@@ -1391,7 +1423,7 @@ YAML
       - ${ARR_DOCKER_DIR}/gluetun:/gluetun
       - ${ARR_DOCKER_DIR}/gluetun/auth:/gluetun/auth
     ports:
-      - "${LAN_IP:-0.0.0.0}:${GLUETUN_CONTROL_PORT:-8000}:${GLUETUN_CONTROL_PORT:-8000}"          # Gluetun control API host bind (LAN_IP); clients use lan_access_host()
+      - "${GLUETUN_CONTROL_BIND_HOST:-127.0.0.1}:${GLUETUN_CONTROL_PORT:-8000}:${GLUETUN_CONTROL_PORT:-8000}"          # Gluetun control API host bind (GLUETUN_CONTROL_BIND_HOST)
       - "${LAN_IP:-0.0.0.0}:${QBT_HTTP_PORT_HOST:-8081}:${QBT_WEBUI_PORT:-8080}"   # qB WebUI via gluetun namespace
       - "${LAN_IP:-0.0.0.0}:${SONARR_PORT:-8989}:${SONARR_PORT:-8989}"                    # Sonarr
       - "${LAN_IP:-0.0.0.0}:${RADARR_PORT:-7878}:${RADARR_PORT:-7878}"                    # Radarr
@@ -1783,7 +1815,7 @@ start_with_checks() {
     note "Waiting for gluetun to report healthy (up to ${max_wait}s)..."
     local waited=0 HEALTH="unknown" IP="" PF="" pf_raw=""
     local ctrl_host
-    ctrl_host="$(lan_access_host)"
+    ctrl_host="$(control_access_host)"
     local ctrl_port="${GLUETUN_CONTROL_PORT:-8000}"
     local -a curl_cmd=(curl -fsS --max-time 5)
     if [ -n "${GLUETUN_API_KEY:-}" ]; then
@@ -1836,7 +1868,7 @@ start_with_checks() {
   fi
   run_or_warn compose_cmd ps
   local ip pf_port="" client_host
-  client_host="$(lan_access_host)"
+  client_host="$(control_access_host)"
   local -a post_curl=(curl -fsS --max-time 5)
   if [ -n "${GLUETUN_API_KEY:-}" ]; then
     post_curl+=(--user "gluetun:${GLUETUN_API_KEY}")
