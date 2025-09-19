@@ -144,6 +144,11 @@ export ARR_BASE ARR_DOCKER_DIR ARR_STACK_DIR ARR_BACKUP_DIR ARR_ENV_FILE LEGACY_
 export MEDIA_DIR DOWNLOADS_DIR COMPLETED_DIR MOVIES_DIR TV_DIR SUBS_DIR
 export QBT_WEBUI_PORT QBT_HTTP_PORT_HOST QBT_USER QBT_PASS QBT_SAVE_PATH QBT_TEMP_PATH LAN_IP ARR_BIND_ADDRESS SONARR_BIND_ADDRESS RADARR_BIND_ADDRESS PROWLARR_BIND_ADDRESS BAZARR_BIND_ADDRESS LOCALHOST_ADDR LOCALHOST_NAME GLUETUN_CONTROL_PORT GLUETUN_CONTROL_BIND_HOST GLUETUN_CONTROL_LISTEN_ADDR GLUETUN_CONTROL_HOST GLUETUN_HEALTH_TARGET GLUETUN_FIREWALL_OUTBOUND_SUBNETS GLUETUN_FIREWALL_INPUT_PORTS GLUETUN_HTTPPROXY GLUETUN_SHADOWSOCKS PUID PGID TIMEZONE UPDATER_PERIOD
 export SONARR_PORT RADARR_PORT PROWLARR_PORT BAZARR_PORT FLARESOLVERR_PORT
+export SONARR_CPU_LIMIT SONARR_MEMORY_LIMIT SONARR_MEMORY_RESERVATION
+export RADARR_CPU_LIMIT RADARR_MEMORY_LIMIT RADARR_MEMORY_RESERVATION
+export PROWLARR_CPU_LIMIT PROWLARR_MEMORY_LIMIT PROWLARR_MEMORY_RESERVATION
+export BAZARR_CPU_LIMIT BAZARR_MEMORY_LIMIT BAZARR_MEMORY_RESERVATION
+export FLARESOLVERR_CPU_LIMIT FLARESOLVERR_MEMORY_LIMIT FLARESOLVERR_MEMORY_RESERVATION
 export DEFAULT_VPN_TYPE SERVER_COUNTRIES SERVER_HOSTNAMES DEFAULT_COUNTRY GLUETUN_API_KEY
 
 : "${GLUETUN_IMAGE:=qmcgaw/gluetun:v3.39.1}"
@@ -1458,6 +1463,13 @@ YAML
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${SONARR_MEMORY_LIMIT}
+          cpus: '${SONARR_CPU_LIMIT}'
+        reservations:
+          memory: ${SONARR_MEMORY_RESERVATION}
 
   radarr:
     image: ${RADARR_IMAGE}
@@ -1484,6 +1496,13 @@ YAML
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${RADARR_MEMORY_LIMIT}
+          cpus: '${RADARR_CPU_LIMIT}'
+        reservations:
+          memory: ${RADARR_MEMORY_RESERVATION}
 
   prowlarr:
     image: ${PROWLARR_IMAGE}
@@ -1507,6 +1526,13 @@ YAML
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${PROWLARR_MEMORY_LIMIT}
+          cpus: '${PROWLARR_CPU_LIMIT}'
+        reservations:
+          memory: ${PROWLARR_MEMORY_RESERVATION}
 
   bazarr:
     image: ${BAZARR_IMAGE}
@@ -1533,6 +1559,13 @@ YAML
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${BAZARR_MEMORY_LIMIT}
+          cpus: '${BAZARR_CPU_LIMIT}'
+        reservations:
+          memory: ${BAZARR_MEMORY_RESERVATION}
 
   flaresolverr:
     image: ${FLARESOLVERR_IMAGE}
@@ -1551,6 +1584,13 @@ YAML
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${FLARESOLVERR_MEMORY_LIMIT}
+          cpus: '${FLARESOLVERR_CPU_LIMIT}'
+        reservations:
+          memory: ${FLARESOLVERR_MEMORY_RESERVATION}
 YAML
   } >"${ARR_STACK_DIR}/docker-compose.yml"
   ok "Wrote ${ARR_STACK_DIR}/docker-compose.yml"
