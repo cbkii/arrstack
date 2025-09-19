@@ -85,6 +85,20 @@ Additional command:
 | `FLARESOLVERR_IMAGE` | `ghcr.io/flaresolverr/flaresolverr:latest` | FlareSolverr container image. |
 | `DEBUG` | `0` | When `1`, keeps installer logs (`--debug` sets this automatically). |
 
+#### Resource envelopes (defaults)
+
+The generated Compose file caps *arr-side services with Raspberry Pi 5-friendly limits. Adjust the exported variables in `arrconf/userconf.sh` to relax or tighten the budgets.
+
+| Service | CPU limit (`cpus`) | Memory limit | Memory reservation | Override variables |
+| ------- | ------------------ | ------------ | ------------------ | ------------------ |
+| Sonarr | `0.6` | `512M` | `256M` | `SONARR_CPU_LIMIT`, `SONARR_MEMORY_LIMIT`, `SONARR_MEMORY_RESERVATION` |
+| Radarr | `1.0` | `1G` | `512M` | `RADARR_CPU_LIMIT`, `RADARR_MEMORY_LIMIT`, `RADARR_MEMORY_RESERVATION` |
+| Prowlarr | `0.4` | `512M` | `256M` | `PROWLARR_CPU_LIMIT`, `PROWLARR_MEMORY_LIMIT`, `PROWLARR_MEMORY_RESERVATION` |
+| Bazarr | `0.35` | `256M` | `128M` | `BAZARR_CPU_LIMIT`, `BAZARR_MEMORY_LIMIT`, `BAZARR_MEMORY_RESERVATION` |
+| FlareSolverr | `1.0` | `1G` | `512M` | `FLARESOLVERR_CPU_LIMIT`, `FLARESOLVERR_MEMORY_LIMIT`, `FLARESOLVERR_MEMORY_RESERVATION` |
+
+*Rule-of-thumb adjustments:* bump Sonarr's memory limit to `768M` if it indexes a large library, increase Bazarr's to `384M` when using multi-language OCR features, and avoid dropping FlareSolverr below `512M` (1 GiB leaves more headroom for Chromium).
+
 ProtonVPN selection tips: prefer unquoted comma-separated country lists such as `SERVER_COUNTRIES=Netherlands,Germany,Switzerland`, or set `SERVER_HOSTNAMES` to explicit Proton hostnames when you need deterministic exits.
 
 #### Ports (host → container)
