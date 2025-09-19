@@ -460,9 +460,8 @@ is_private_ipv4() {
 detect_lan_ip_candidate() {
   command -v ip >/dev/null 2>&1 || return 2
 
-  while IFS= read -r line; do
-    local idx ifname inet addr _
-    read -r idx ifname inet addr _ <<<"$line" || continue
+  while read -r _ ifname family addr _; do
+    [[ "$family" == "inet" ]] || continue
     addr="${addr%%/*}"
     [[ -n "$addr" ]] || continue
 
