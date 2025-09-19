@@ -8,16 +8,33 @@ IFS=$'\n\t'
 # Resolve repo root if not already set
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
+LAN_IP_CONFIGURED_EXPLICITLY=0
+LAN_IP_AUTO_DETECTED=0
+LAN_IP_DETECTION_NOTE=""
+
+if [[ -n "${LAN_IP+set}" && -n "${LAN_IP}" ]]; then
+  LAN_IP_CONFIGURED_EXPLICITLY=1
+fi
+
 # 1) Load tracked defaults
 if [ -f "${REPO_ROOT}/arrconf/userconf.defaults.sh" ]; then
   # shellcheck source=/dev/null
   . "${REPO_ROOT}/arrconf/userconf.defaults.sh"
 fi
 
+LAN_IP_VALUE_BEFORE_USERCONF="${LAN_IP:-}"
+
 # 2) Load user overrides (untracked)
 if [ -f "${REPO_ROOT}/arrconf/userconf.sh" ]; then
   # shellcheck source=/dev/null
   . "${REPO_ROOT}/arrconf/userconf.sh"
+  if [[ -n "${LAN_IP:-}" && "${LAN_IP}" != "${LAN_IP_VALUE_BEFORE_USERCONF}" ]]; then
+    LAN_IP_CONFIGURED_EXPLICITLY=1
+  elif [[ -n "${LAN_IP:-}" && "${LAN_IP}" == "${LAN_IP_VALUE_BEFORE_USERCONF}" ]]; then
+    if grep -Eq '^[[:space:]]*LAN_IP=' "${REPO_ROOT}/arrconf/userconf.sh" 2>/dev/null; then
+      LAN_IP_CONFIGURED_EXPLICITLY=1
+    fi
+  fi
 fi
 
 umask 077
@@ -425,6 +442,16 @@ have_ip() {
   ip -o -4 addr show | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "$needle"
 }
 
+is_rfc1918_ipv4() {
+  local ip="$1"
+  case "$ip" in
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*)
+      return 0 ;;
+    *)
+      return 1 ;;
+  esac
+}
+
 is_private_ipv4() {
   local ip="$1"
   case "$ip" in
@@ -435,19 +462,70 @@ is_private_ipv4() {
   esac
 }
 
+detect_lan_ip_candidate() {
+  command -v ip >/dev/null 2>&1 || return 2
+
+  while read -r _ ifname family addr _; do
+    [[ "$family" == "inet" ]] || continue
+    addr="${addr%%/*}"
+    [[ -n "$addr" ]] || continue
+
+    case "$ifname" in
+      lo|docker*|br-*|veth*|tun*|tap*|wg*)
+        continue
+        ;;
+    esac
+
+    if is_rfc1918_ipv4 "$addr"; then
+      printf '%s' "$addr"
+      return 0
+    fi
+  done < <(ip -o -4 addr show 2>/dev/null)
+
+  return 1
+}
+
 ensure_lan_ip_binding() {
-  if [[ -z "${LAN_IP:-}" ]]; then
-    LAN_IP="0.0.0.0"
+  local configured="${LAN_IP:-}"
+
+  detect_and_set_lan_ip() {
+    local candidate=""
+    if ! candidate="$(detect_lan_ip_candidate)"; then
+      local rc=$?
+      if [[ $rc -eq 2 ]]; then
+        die "LAN_IP not set and unable to auto-detect without the 'ip' command. Install iproute2 or set LAN_IP in arrconf/userconf.sh."
+      fi
+      die "LAN_IP not set and no RFC1918 IPv4 was detected. Set LAN_IP in arrconf/userconf.sh to your LAN adapter address."
+    fi
+    LAN_IP="$candidate"
+    LAN_IP_AUTO_DETECTED=1
+    LAN_IP_DETECTION_NOTE="Auto-detected LAN_IP=${LAN_IP}"
+    export LAN_IP
+  }
+
+  if [[ -z "$configured" ]]; then
+    detect_and_set_lan_ip
+    return
+  fi
+
+  if [[ "$configured" == "0.0.0.0" ]]; then
+    if (( ! LAN_IP_CONFIGURED_EXPLICITLY )); then
+      die "LAN_IP resolved to 0.0.0.0 without explicit configuration. Set LAN_IP=0.0.0.0 in arrconf/userconf.sh if you intend to expose services on all interfaces."
+    fi
     export LAN_IP
     return
   fi
-  if [[ "${LAN_IP}" = "0.0.0.0" ]] || have_ip "${LAN_IP}"; then
+
+  if have_ip "$configured"; then
     export LAN_IP
     return
   fi
-  warn "LAN_IP=${LAN_IP} not found on host; falling back to 0.0.0.0"
-  LAN_IP="0.0.0.0"
-  export LAN_IP
+
+  if (( LAN_IP_CONFIGURED_EXPLICITLY )); then
+    die "Configured LAN_IP=${configured} is not assigned on this host. Update arrconf/userconf.sh or adjust your network configuration."
+  fi
+
+  detect_and_set_lan_ip
 }
 
 lan_access_host() {
@@ -1097,8 +1175,15 @@ EOF
 
 # Warn if LAN_IP is 0.0.0.0 which exposes services on all interfaces
 warn_lan_ip() {
+  if (( LAN_IP_AUTO_DETECTED )) && [[ -n "${LAN_IP_DETECTION_NOTE}" ]]; then
+    note "${LAN_IP_DETECTION_NOTE} (edit arrconf/userconf.sh to override)."
+  fi
+
   if [ "${LAN_IP}" = "0.0.0.0" ]; then
-    warn "LAN_IP is set to 0.0.0.0 — this exposes every published service port. Set LAN_IP to your LAN adapter (e.g. 192.168.1.10) unless you intend to listen on all interfaces."
+    if (( ! LAN_IP_CONFIGURED_EXPLICITLY )); then
+      die "LAN_IP is 0.0.0.0 but no explicit configuration was detected. Set LAN_IP=0.0.0.0 intentionally in arrconf/userconf.sh to expose all interfaces."
+    fi
+    warn "LAN_IP explicitly set to 0.0.0.0 — this exposes every published service port."
     LAN_IP_ALL_INTERFACES=1
   elif [[ -n "${LAN_IP}" ]] && ! is_private_ipv4 "${LAN_IP}"; then
     warn "LAN_IP=${LAN_IP} is not an RFC1918 address; ensure you intend to expose the stack beyond your LAN."
@@ -1691,13 +1776,16 @@ wait_for_port_forwarding() {
 }
 
 validate_lan_access() {
-  note "Validating LAN access..."
+  local probe_host
+  probe_host="$(lan_access_host)"
+
+  note "Validating LAN access via ${probe_host}..."
   local failed=0
   local services="8989:Sonarr 7878:Radarr 9696:Prowlarr 6767:Bazarr 8191:FlareSolverr 8081:qBittorrent"
 
   for service in $services; do
     local port="${service%%:*}" name="${service#*:}"
-    if timeout 5 curl -fsS "http://${LAN_IP}:${port}" >/dev/null 2>&1; then
+    if timeout 5 curl -fsS "http://${probe_host}:${port}" >/dev/null 2>&1; then
       ok "$name accessible on port $port"
     else
       warn "$name NOT accessible on port $port"
@@ -1855,7 +1943,9 @@ main() {
   echo
   ok "Done. Next steps:"
   note "  • Edit ${PROTON_AUTH_FILE} (username WITHOUT +pmp) if you haven't already."
-  note "  • qB Web UI: http://${LOCALHOST_NAME}:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
+  local final_access_host
+  final_access_host="$(lan_access_host)"
+  note "  • qB Web UI: http://${final_access_host}:${QBT_HTTP_PORT_HOST} (use printed admin password or preset QBT_USER/QBT_PASS)."
 }
 
 cleanup() {
